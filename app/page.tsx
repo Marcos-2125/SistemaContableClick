@@ -108,7 +108,55 @@ export default function Home() {
   const [material, setMaterial] = useState('');
   const [trabajos, setTrabajos] = useState<any[]>([]); // <--- PEGA ESTA LÍNEA AQUÍ
   const [mostrarSugerencias, setMostrarSugerencias] = useState(false);
+  const [montoAcuenta, setMontoAcuenta] = useState(0); // <--- PEGA ESTA AQUÍ
+  // ==========================================
+  // PEGA LA FUNCIÓN AQUÍ ABAJO:
+  // ==========================================
+ const finalizarPedido = async () => {
+    if (trabajos.length === 0) return alert("Debes agregar al menos un trabajo");
 
+    try {
+      // Calculamos el total (asegurando que sean números)
+      const totalActual = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
+
+      // 1. Insertamos con nombres de tabla y columnas en minúsculas
+      const { data, error } = await supabase
+        .from('pedidos_activos') // <--- Tabla en minúsculas
+        .insert([
+          {
+            nombre_cliente: nombreClienteInput,     // <--- Columna en minúsculas
+            telefono_cliente: telClienteInput,     // <--- Columna en minúsculas
+            tipo_cliente: tipoClienteInput || 'Regular',
+            trabajos: trabajos,                     // <--- Columna en minúsculas
+            total_pedido: totalActual,              // <--- Columna en minúsculas
+            acuenta: montoAcuenta,
+      saldo: (trabajos.reduce((acc, t) => acc + (t.precio || 0), 0) - montoAcuenta),
+      estado: 'Pendiente'
+          }
+        ])
+        .select();
+
+      if (error) {
+        // Mostramos el error exacto si Supabase rechaza algo
+        console.error("Error específico de Supabase:", error.code, error.message, error.details);
+        alert(`Error ${error.code}: ${error.message}`);
+        return;
+      }
+
+      alert("¡Pedido registrado con éxito en la base de datos!");
+      
+      // Limpiamos todo tras el éxito
+      setTrabajos([]);
+      setNombreClienteInput('');
+      setTelClienteInput('');
+      setTipoClienteInput('Regular');
+      setAccionInicio('menu');
+
+    } catch (err: any) {
+      console.error("Error de código:", err);
+      alert("Ocurrió un error inesperado en el sistema");
+    }
+  };
   return (
     <main className="min-h-screen bg-gray-100 font-sans pb-24 text-slate-900">
 
@@ -377,65 +425,122 @@ export default function Home() {
                     </div>
                   )}
 
-                  {/* FORMULARIO PARA AGREGAR TRABAJO INDIVIDUAL */}
-                  <div className="p-5 rounded-3xl space-y-4 border-2 border-blue-100 bg-white shadow-md relative">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-black text-gray-400 ml-1 uppercase">Servicio</label>
-                      <select
-                        className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold bg-gray-50 outline-none appearance-none"
-                        value={material}
-                        onChange={(e) => setMaterial(e.target.value)}
-                      >
-                        <option value="">-- Elige un servicio --</option>
-                        {listaServicios.map((s, i) => (
-                          <option key={i} value={s}>{s}</option>
-                        ))}
-                      </select>
-                    </div>
+        {/* FORMULARIO PARA AGREGAR TRABAJO INDIVIDUAL */}
+<div className="p-5 rounded-3xl space-y-4 border-2 border-blue-100 bg-white shadow-md relative">
+  <div className="space-y-1">
+    <label className="text-[10px] font-black text-gray-400 ml-1 uppercase">Servicio</label>
+    <select
+      className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold bg-gray-50 outline-none appearance-none"
+      value={material}
+      onChange={(e) => setMaterial(e.target.value)}
+    >
+      <option value="">-- Elige un servicio --</option>
+      {listaServicios.map((s, i) => (
+        <option key={i} value={s}>{s}</option>
+      ))}
+    </select>
+  </div>
 
-                    <div className="grid grid-cols-3 gap-2">
-                      <input id="ancho" type="text" placeholder="Ancho m" className="p-3 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500" />
-                      <input id="alto" type="text" placeholder="Alto m" className="p-3 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500" />
-                      <input id="cant" type="number" defaultValue="1" className="p-3 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500" />
-                    </div>
+  <div className="grid grid-cols-3 gap-2">
+    <div>
+      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Ancho</label>
+      <input id="ancho" type="text" placeholder="0.00" className="w-full p-3 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500" />
+    </div>
+    <div>
+      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Alto</label>
+      <input id="alto" type="text" placeholder="0.00" className="w-full p-3 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500" />
+    </div>
+    <div>
+      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Cant.</label>
+      <input id="cant" type="number" defaultValue="1" className="w-full p-3 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500" />
+    </div>
+  </div>
 
-                    <button 
-                      onClick={() => {
-                        const s = material;
-                        const an = (document.getElementById('ancho') as HTMLInputElement).value;
-                        const al = (document.getElementById('alto') as HTMLInputElement).value;
-                        const ct = (document.getElementById('cant') as HTMLInputElement).value;
-                        
-                        if(!s || !an || !al) return alert("Por favor completa los datos del trabajo");
-                        
-                        setTrabajos([...trabajos, { servicio: s, ancho: an, alto: al, cant: ct }]);
-                        // Limpiar los inputs para el siguiente trabajo
-                        setMaterial('');
-                        (document.getElementById('ancho') as HTMLInputElement).value = '';
-                        (document.getElementById('alto') as HTMLInputElement).value = '';
-                        (document.getElementById('cant') as HTMLInputElement).value = '1';
-                      }}
-                      className="w-full p-3 rounded-xl font-black text-[10px] bg-emerald-500 text-white uppercase shadow-lg active:scale-95 transition-all"
-                    >
-                      + AGREGAR OTRO TRABAJO
-                    </button>
-                  </div>
+  {/* NUEVOS CAMPOS: PRECIO Y DETALLES POR TRABAJO */}
+  <div className="grid grid-cols-2 gap-2">
+    <div>
+      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Precio Unit.</label>
+      <input id="precio_unit" type="number" placeholder="0.00" className="w-full p-3 rounded-xl text-sm font-bold border border-blue-500 bg-blue-50 outline-none" />
+    </div>
+    <div>
+      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Detalle/Nota</label>
+      <input id="detalle_trabajo" type="text" placeholder="Ej: Ojales cada 50cm" className="w-full p-3 rounded-xl text-xs font-bold border border-gray-100 outline-none focus:border-blue-500" />
+    </div>
+  </div>
 
-                  {/* BOTÓN FINAL DE GUARDADO */}
-                  <button 
-                    onClick={() => {
-                      if(trabajos.length === 0) return alert("Debes agregar al menos un trabajo al pedido");
-                      alert(`Pedido guardado para ${nombreClienteInput} con ${trabajos.length} trabajos.`);
-                      setAccionInicio('menu');
-                      setTrabajos([]);
-                      setNombreClienteInput('');
-                      setTelClienteInput('');
-                      setTipoClienteInput('');
-                    }}
-                    className="w-full p-5 rounded-2xl font-black text-white shadow-2xl bg-blue-600 active:scale-95 transition-all mt-4 italic"
-                  >
-                    FINALIZAR PEDIDO COMPLETO
-                  </button>
+  <button 
+    onClick={() => {
+      const s = material;
+      const an = (document.getElementById('ancho') as HTMLInputElement).value;
+      const al = (document.getElementById('alto') as HTMLInputElement).value;
+      const ct = (document.getElementById('cant') as HTMLInputElement).value;
+      const pr = (document.getElementById('precio_unit') as HTMLInputElement).value;
+      const dt = (document.getElementById('detalle_trabajo') as HTMLInputElement).value;
+      
+      if(!s || !an || !al || !pr) return alert("Por favor completa Servicio, Medidas y Precio");
+      
+      // Ahora guardamos el precio real y el detalle
+      setTrabajos([...trabajos, { 
+        servicio: s, 
+        ancho: an, 
+        alto: al, 
+        cant: ct, 
+        precio: Number(pr) * Number(ct), // Total de este item
+        detalle: dt 
+      }]);
+
+      // Limpiar inputs
+      setMaterial('');
+      (document.getElementById('ancho') as HTMLInputElement).value = '';
+      (document.getElementById('alto') as HTMLInputElement).value = '';
+      (document.getElementById('cant') as HTMLInputElement).value = '1';
+      (document.getElementById('precio_unit') as HTMLInputElement).value = '';
+      (document.getElementById('detalle_trabajo') as HTMLInputElement).value = '';
+    }}
+    className="w-full p-3 rounded-xl font-black text-[10px] bg-emerald-500 text-white uppercase shadow-lg active:scale-95 transition-all"
+  >
+    + AGREGAR OTRO TRABAJO
+  </button>
+</div>
+
+{/* SECCIÓN DE PAGO (ACUENTA Y SALDO) */}
+<div className="mt-4 p-5 bg-slate-800 rounded-3xl text-white shadow-xl space-y-3">
+  <div className="flex justify-between items-center border-b border-slate-700 pb-2">
+    <span className="text-[10px] font-black uppercase">Total Pedido:</span>
+    <span className="text-xl font-mono font-bold text-emerald-400">
+      {trabajos.reduce((acc, t) => acc + (t.precio || 0), 0).toFixed(2)} Bs.
+    </span>
+  </div>
+  
+  <div className="grid grid-cols-2 gap-4">
+    <div>
+      <label className="text-[9px] font-black text-slate-400 uppercase">A cuenta</label>
+      <input 
+        id="monto_acuenta" 
+        type="number" 
+        placeholder="0.00" 
+        className="w-full p-3 bg-slate-700 border-none rounded-xl text-white font-bold"
+        onChange={() => {
+          // Esto es opcional para calcular el saldo visualmente si quieres
+        }}
+      />
+    </div>
+    <div>
+      <label className="text-[9px] font-black text-slate-400 uppercase">Saldo Pendiente</label>
+      <div className="w-full p-3 bg-slate-900 rounded-xl text-red-400 font-bold text-center">
+        {/* El saldo se calcula restando el input del total */}
+        CALCULO AUTOMÁTICO
+      </div>
+    </div>
+  </div>
+</div>
+
+<button 
+  onClick={finalizarPedido}
+  className="w-full p-5 rounded-2xl font-black text-white shadow-2xl bg-blue-600 active:scale-95 transition-all mt-4 italic"
+>
+  FINALIZAR PEDIDO COMPLETO
+</button>
                 </div>
               </div>
             )}
