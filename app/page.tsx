@@ -109,54 +109,113 @@ export default function Home() {
   const [trabajos, setTrabajos] = useState<any[]>([]); // <--- PEGA ESTA LÍNEA AQUÍ
   const [mostrarSugerencias, setMostrarSugerencias] = useState(false);
   const [montoAcuenta, setMontoAcuenta] = useState(0); // <--- PEGA ESTA AQUÍ
+  const [listaPedidosTaller, setListaPedidosTaller] = useState<any[]>([]);
+  const [clienteAbierto, setClienteAbierto] = useState<string | null>(null);
   // ==========================================
-  // PEGA LA FUNCIÓN AQUÍ ABAJO:
-  // ==========================================
- const finalizarPedido = async () => {
+// --- FUNCIÓN MEJORADA: FINALIZAR PEDIDO (REPARTE EN 2 TABLAS) ---
+  const finalizarPedido = async () => {
     if (trabajos.length === 0) return alert("Debes agregar al menos un trabajo");
+    if (!nombreClienteInput) return alert("El nombre del cliente es obligatorio");
 
     try {
-      // Calculamos el total (asegurando que sean números)
+      const idPedidoActual = Date.now(); 
       const totalActual = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
+      const saldoCalculado = totalActual - montoAcuenta;
+      const resumenDetalle = trabajos.map(t => 
+        `${t.cant} ${t.servicio.toUpperCase()} (${t.ancho}x${t.alto})`
+      ).join(" / ");
 
-      // 1. Insertamos con nombres de tabla y columnas en minúsculas
-      const { data, error } = await supabase
-        .from('pedidos_activos') // <--- Tabla en minúsculas
-        .insert([
-          {
-            nombre_cliente: nombreClienteInput,     // <--- Columna en minúsculas
-            telefono_cliente: telClienteInput,     // <--- Columna en minúsculas
-            tipo_cliente: tipoClienteInput || 'Regular',
-            trabajos: trabajos,                     // <--- Columna en minúsculas
-            total_pedido: totalActual,              // <--- Columna en minúsculas
-            acuenta: montoAcuenta,
-      saldo: (trabajos.reduce((acc, t) => acc + (t.precio || 0), 0) - montoAcuenta),
-      estado: 'Pendiente'
-          }
-        ])
-        .select();
+      // PASO A: INSERTAR EN 'pedidos_activos' PARA EL TALLER
+      const filasParaTaller = trabajos.map(t => ({
+        id_pedido: idPedidoActual,
+        nombre_cliente: nombreClienteInput.toUpperCase(),
+        servicio: t.servicio,
+        ancho: t.ancho,
+        alto: t.alto,
+        cantidad: Number(t.cant),
+        detalle: t.detalle || '',
+        estado: 'Pendiente'
+      }));
 
-      if (error) {
-        // Mostramos el error exacto si Supabase rechaza algo
-        console.error("Error específico de Supabase:", error.code, error.message, error.details);
-        alert(`Error ${error.code}: ${error.message}`);
-        return;
+      const { error: errorTaller } = await supabase.from('pedidos_activos').insert(filasParaTaller);
+      if (errorTaller) throw errorTaller;
+
+      // PASO B: ACTUALIZAR O CREAR EN 'registro_ventas'
+      const { data: pedidoExistente } = await supabase
+        .from('registro_ventas')
+        .select('*')
+        .eq('nombre_cliente', nombreClienteInput.toUpperCase())
+        .eq('estado', 'Pendiente')
+        .single();
+
+      if (pedidoExistente) {
+        const { error: errorUpdate } = await supabase
+          .from('registro_ventas')
+          .update({
+            detalle_servicio: pedidoExistente.detalle_servicio + " // " + resumenDetalle,
+            pedido_total: pedidoExistente.pedido_total + totalActual,
+            cuenta: pedidoExistente.cuenta + montoAcuenta,
+            saldo: (pedidoExistente.pedido_total + totalActual) - (pedidoExistente.cuenta + montoAcuenta)
+          })
+          .eq('id_pedido', pedidoExistente.id_pedido);
+        if (errorUpdate) throw errorUpdate;
+      } else {
+        const { error: errorVenta } = await supabase
+          .from('registro_ventas')
+          .insert([{
+            id_pedido: idPedidoActual,
+            nombre_cliente: nombreClienteInput.toUpperCase(),
+            telefono_cliente: telClienteInput,
+            detalle_servicio: resumenDetalle,
+            pedido_total: totalActual,
+            cuenta: montoAcuenta,
+            saldo: saldoCalculado,
+            estado: 'Pendiente'
+          }]);
+        if (errorVenta) throw errorVenta;
       }
 
-      alert("¡Pedido registrado con éxito en la base de datos!");
-      
-      // Limpiamos todo tras el éxito
+      alert("¡Pedido guardado y enviado al taller!");
       setTrabajos([]);
       setNombreClienteInput('');
       setTelClienteInput('');
-      setTipoClienteInput('Regular');
+      setMontoAcuenta(0);
       setAccionInicio('menu');
 
     } catch (err: any) {
-      console.error("Error de código:", err);
-      alert("Ocurrió un error inesperado en el sistema");
+      console.error("Error completo:", err);
+      alert("Error: " + (err.message || "No se pudo guardar"));
     }
   };
+
+  // ==========================================
+  // --- PASO 2: FUNCIONES DE CONTROL DE TALLER ---
+  // ==========================================
+  
+  const cargarPedidosTaller = async () => {
+    const { data, error } = await supabase
+      .from('pedidos_activos')
+      .select('*')
+      .neq('estado', 'Finalizado') 
+      .order('id', { ascending: true });
+    if (data) setListaPedidosTaller(data);
+  };
+
+  const cambiarEstadoPedido = async (id: number, nuevoEstado: string) => {
+    const { error } = await supabase
+      .from('pedidos_activos')
+      .update({ estado: nuevoEstado })
+      .eq('id', id);
+    if (!error) {
+      cargarPedidosTaller(); 
+    }
+  };
+
+  useEffect(() => {
+    if (pestaña === 'pedidos') {
+      cargarPedidosTaller();
+    }
+  }, [pestaña]);
   return (
     <main className="min-h-screen bg-gray-100 font-sans pb-24 text-slate-900">
 
@@ -330,242 +389,376 @@ export default function Home() {
                 </div>
               </div>
             )}
+{/* VISTA: REGISTRO DE PEDIDO - DISEÑO ESTILO RECIBO PROFESIONAL */}
+          {accionInicio === 'nuevo-pedido' && (
+            <div className="bg-white rounded-3xl shadow-2xl border border-gray-100 animate-in slide-in-from-bottom duration-300 max-w-md mx-auto overflow-hidden mb-24">
+              
+              {/* Encabezado del Recibo */}
+              <div className="bg-slate-800 p-4 text-center relative">
+                <h2 className="text-white font-black italic tracking-widest uppercase text-sm">Nota de Venta / Recibo</h2>
+                <p className="text-slate-400 text-[9px] font-bold tracking-tighter uppercase">Click Gestión de Inventario</p>
+                <button 
+                  onClick={() => { setAccionInicio('menu'); setTrabajos([]); setNombreClienteInput(''); setTelClienteInput(''); }} 
+                  className="absolute right-4 top-4 text-slate-400 hover:text-white font-bold"
+                >✕</button>
+              </div>
 
-           {/* VISTA: REGISTRO DE PEDIDO (MULTITRABAJO Y BUSCADOR INTELIGENTE) */}
-            {accionInicio === 'nuevo-pedido' && (
-              <div className="bg-white p-6 rounded-3xl shadow-2xl border border-gray-100 animate-in slide-in-from-bottom duration-300">
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-xl font-black text-gray-800 italic">Registrar Pedido</h2>
-                  <button onClick={() => { setAccionInicio('menu'); setTrabajos([]); setNombreClienteInput(''); setTelClienteInput(''); setTipoClienteInput(''); }} className="bg-gray-100 text-gray-400 h-10 w-10 rounded-full font-bold">✕</button>
+              <div className="p-5 space-y-4">
+                {/* 1. SECCIÓN: DATOS DEL CLIENTE */}
+                <div className="space-y-2 border-b pb-4">
+                  <div className="flex gap-2">
+                    <div className="w-1/3">
+                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Teléfono</label>
+                      <input 
+                        type="tel" 
+                        className="w-full p-3 bg-gray-50 border rounded-xl font-bold text-xs outline-none focus:border-blue-500 shadow-sm"
+                        value={telClienteInput}
+                        onChange={(e) => {
+                          setTelClienteInput(e.target.value);
+                          const encontrado = listaClientes.find(c => c.Telefono === e.target.value);
+                          if (encontrado) { 
+                            setNombreClienteInput(encontrado.Nombre); 
+                            setTipoClienteInput(encontrado.Tipo); 
+                          }
+                        }}
+                      />
+                    </div>
+                    <div className="flex-1 relative">
+                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Cliente</label>
+                      <input 
+                        type="text" 
+                        className="w-full p-3 bg-gray-50 border rounded-xl font-bold text-xs uppercase outline-none shadow-sm"
+                        value={nombreClienteInput}
+                        onChange={(e) => {
+                          setNombreClienteInput(e.target.value);
+                          setMostrarSugerencias(true);
+                          if (e.target.value === "") { setTelClienteInput(""); setMostrarSugerencias(false); }
+                        }}
+                      />
+                      {/* Buscador de sugerencias */}
+                      {mostrarSugerencias && nombreClienteInput.length > 1 && (
+                        <div className="absolute z-30 w-full mt-1 bg-white shadow-2xl rounded-2xl border border-gray-100 max-h-40 overflow-y-auto">
+                          {listaClientes
+                            .filter(c => c.Nombre.toLowerCase().includes(nombreClienteInput.toLowerCase()))
+                            .map(c => (
+                              <div 
+                                key={c.id} 
+                                className="p-3 hover:bg-blue-600 hover:text-white cursor-pointer border-b text-[10px] font-black uppercase transition-colors"
+                                onClick={() => {
+                                  setNombreClienteInput(c.Nombre);
+                                  setTelClienteInput(c.Telefono);
+                                  setTipoClienteInput(c.Tipo || 'Regular');
+                                  setMostrarSugerencias(false);
+                                }}
+                              >
+                                {c.Nombre}
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="space-y-4">
-                  {/* SECCIÓN DATOS DEL CLIENTE */}
-                  <div className="grid grid-cols-1 gap-3 p-4 bg-gray-50 rounded-2xl border border-gray-100 relative">
-                    <div className="flex gap-2">
-                      <div className="flex-1">
-                        <label className="text-[10px] font-black text-gray-400 ml-1 uppercase tracking-widest">Telefono</label>
-                        <input 
-                          type="tel" 
-                          className="w-full p-3 bg-white border border-gray-200 rounded-xl font-bold outline-none shadow-sm"
-                          value={telClienteInput}
-                          onChange={(e) => {
-                            setTelClienteInput(e.target.value);
-                            const encontrado = listaClientes.find(c => c.Telefono === e.target.value);
-                            if (encontrado) { 
-                              setNombreClienteInput(encontrado.Nombre); 
-                              setTipoClienteInput(encontrado.Tipo); 
-                            }
-                          }}
-                        />
-                      </div>
-                      <div className="w-24 text-center">
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Tipo</label>
-                        <div className="w-full h-[46px] bg-gray-200 border border-gray-300 rounded-xl font-black text-[9px] text-gray-600 flex items-center justify-center uppercase shadow-inner">
-                          {tipoClienteInput || "---"}
-                        </div>
-                      </div>
-                    </div>
+                {/* 2. SECCIÓN: AGREGAR TRABAJO */}
+<div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 space-y-3">
+  <select
+    className="w-full p-3 rounded-xl border border-blue-200 text-xs font-black uppercase bg-white outline-none"
+    value={material}
+    onChange={(e) => setMaterial(e.target.value)}
+  >
+    <option value="">-- SELECCIONAR SERVICIO --</option>
+    {listaServicios.map((s, i) => <option key={i} value={s}>{s}</option>)}
+  </select>
 
-                    <div className="relative">
-  <label className="text-[10px] font-black text-gray-400 ml-1 uppercase tracking-widest">Nombre del Cliente</label>
-  <input 
-    type="text" 
-    className="w-full p-3 bg-white border border-gray-200 rounded-xl font-bold outline-none shadow-sm"
-    value={nombreClienteInput}
-    onChange={(e) => {
-      setNombreClienteInput(e.target.value);
-      setMostrarSugerencias(true); // <--- Mostramos al escribir
-      if (e.target.value === "") { 
-        setTipoClienteInput(""); 
-        setTelClienteInput(""); 
-        setMostrarSugerencias(false); 
-      }
-    }}
-  />
-                      
-                      {/* LISTA DE SUGERENCIAS CORREGIDA */}
-  {mostrarSugerencias && nombreClienteInput.length > 1 && (
-    <div className="absolute z-30 w-full mt-1 bg-white shadow-2xl rounded-2xl border border-gray-100 max-h-48 overflow-y-auto">
-      {listaClientes
-        .filter(c => c.Nombre.toLowerCase().includes(nombreClienteInput.toLowerCase()))
-        .map(c => (
-          <div 
-            key={c.id} 
-            className="p-3 hover:bg-blue-600 hover:text-white cursor-pointer border-b border-gray-50 flex justify-between items-center transition-colors"
-            onClick={() => {
-              setNombreClienteInput(c.Nombre);
-              setTelClienteInput(c.Telefono);
-              setTipoClienteInput(c.Tipo || 'Regular');
-              setMostrarSugerencias(false); // <--- ¡AQUÍ SE CIERRA!
-            }}
-          >
-            <span className="text-xs font-black uppercase">{c.Nombre}</span>
-            <span className="text-[9px] font-bold opacity-70">{c.Tipo}</span>
-          </div>
-        ))}
+  {/* Inputs con etiquetas de Metros (m) */}
+  <div className="grid grid-cols-3 gap-2">
+    <div className="relative">
+      <label className="text-[8px] font-black text-blue-500 absolute -top-2 left-2 bg-white px-1">ANCHO (m)</label>
+      <input id="ancho" type="number" step="0.01" placeholder="0.00" className="p-3 w-full rounded-xl text-xs font-bold border border-blue-200 text-center shadow-sm outline-none focus:border-blue-500" />
     </div>
-  )}
+    <div className="relative">
+      <label className="text-[8px] font-black text-blue-500 absolute -top-2 left-2 bg-white px-1">ALTO (m)</label>
+      <input id="alto" type="number" step="0.01" placeholder="0.00" className="p-3 w-full rounded-xl text-xs font-bold border border-blue-200 text-center shadow-sm outline-none focus:border-blue-500" />
+    </div>
+    <div className="relative">
+      <label className="text-[8px] font-black text-gray-400 absolute -top-2 left-2 bg-white px-1">CANT.</label>
+      <input id="cant" type="number" defaultValue="1" className="p-3 w-full rounded-xl text-xs font-bold border border-blue-200 text-center shadow-sm outline-none" />
+    </div>
+  </div>
+
+  <p className="text-[9px] text-blue-600 font-bold italic px-1">💡 Ejemplo: 60cm poner 0.60 | 1.2 metros poner 1.20</p>
+
+  <input 
+    id="detalle_trabajo" 
+    type="text" 
+    placeholder="DETALLES (Ej: Ojalillos, Lona Mate, Corte recto)" 
+    className="w-full p-3 rounded-xl border border-blue-200 text-[10px] font-bold uppercase outline-none shadow-sm" 
+  />
+
+  <div className="flex gap-2 items-center">
+    <div className="flex-1 bg-white border-2 border-emerald-400 rounded-xl flex items-center px-3 shadow-sm">
+      <span className="text-[10px] font-black text-emerald-600 mr-2">Bs.</span>
+      <input id="precio_final" type="number" placeholder="PRECIO TOTAL" className="w-full py-3 font-black text-sm outline-none bg-transparent" />
+    </div>
+    <button 
+      onClick={() => {
+        const s = material;
+        const an = (document.getElementById('ancho') as HTMLInputElement).value;
+        const al = (document.getElementById('alto') as HTMLInputElement).value;
+        const ct = (document.getElementById('cant') as HTMLInputElement).value;
+        const pr = (document.getElementById('precio_final') as HTMLInputElement).value;
+        const dt = (document.getElementById('detalle_trabajo') as HTMLInputElement).value;
+        
+        if(!s || !pr || !an || !al) return alert("Falta llenar datos (Servicio, Medidas o Precio)");
+
+        // --- VALIDACIÓN DE SEGURIDAD PARA METROS ---
+        if (parseFloat(an) >= 10 || parseFloat(al) >= 10) {
+          const confirmar = confirm(`Has puesto ${an}x${al} metros. ¿Estás seguro que no son centímetros?\n\nSi son centímetros, usa 0.60 en lugar de 60.`);
+          if (!confirmar) return;
+        }
+        
+        setTrabajos([...trabajos, { 
+          servicio: s, ancho: an, alto: al, cant: ct, precio: Number(pr), detalle: dt 
+        }]);
+
+        // Limpiar campos de trabajo
+        setMaterial('');
+        (document.getElementById('ancho') as HTMLInputElement).value = '';
+        (document.getElementById('alto') as HTMLInputElement).value = '';
+        (document.getElementById('cant') as HTMLInputElement).value = '1';
+        (document.getElementById('precio_final') as HTMLInputElement).value = '';
+        (document.getElementById('detalle_trabajo') as HTMLInputElement).value = '';
+      }}
+      className="bg-emerald-500 text-white h-12 px-4 rounded-xl font-black text-xs shadow-lg active:scale-95"
+    >
+      + AÑADIR
+    </button>
+  </div>
+</div>
+
+                {/* 3. LISTA DE ITEMS AGREGADOS */}
+                {trabajos.length > 0 && (
+                  <div className="border border-dashed border-slate-300 rounded-2xl overflow-hidden shadow-inner">
+                    <table className="w-full text-[10px]">
+                      <thead className="bg-slate-50 border-b">
+                        <tr className="text-slate-400 font-black">
+                          <th className="p-2 text-left">DESCRIPCIÓN</th>
+                          <th className="p-2 text-right">TOTAL</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {trabajos.map((t, idx) => (
+                          <tr key={idx} className="bg-white">
+                            <td className="p-2">
+                              <p className="font-black uppercase text-blue-700">{t.servicio}</p>
+                              <p className="text-gray-400 font-bold">{t.ancho}x{t.alto} | {t.cant} pz</p>
+                              {t.detalle && <p className="text-[8px] italic text-gray-500 leading-tight">{t.detalle}</p>}
+                            </td>
+                            <td className="p-2 text-right font-black text-slate-700">{t.precio.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* 4. TOTALES, A CUENTA Y SALDO */}
+                <div className="bg-slate-50 border-2 border-slate-200 rounded-3xl p-5 space-y-3 shadow-md">
+                  <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                    <span className="text-[10px] font-black text-slate-500 uppercase">Total Pedido:</span>
+                    <span className="text-xl font-black text-slate-800 font-mono">
+                      {trabajos.reduce((acc, t) => acc + (t.precio || 0), 0).toFixed(2)} Bs.
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black text-emerald-600 uppercase ml-1 italic">A Cuenta:</label>
+                      <input 
+                        type="number" 
+                        placeholder="0.00" 
+                        className="w-full p-3 bg-white border-2 border-emerald-200 rounded-2xl font-black text-emerald-700 outline-none text-center shadow-sm"
+                        onChange={(e) => setMontoAcuenta(Number(e.target.value) || 0)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-black text-red-500 uppercase ml-1 italic">Saldo Pendiente:</label>
+                      <div className="w-full p-3 bg-red-50 border-2 border-red-100 rounded-2xl font-black text-red-600 text-center text-sm font-mono shadow-sm">
+                        {(trabajos.reduce((acc, t) => acc + (t.precio || 0), 0) - montoAcuenta).toFixed(2)}
+                      </div>
                     </div>
                   </div>
 
-                  {/* LISTA DE TRABAJOS (Si hay alguno agregado) */}
-                  {trabajos.length > 0 && (
-                    <div className="space-y-2 max-h-40 overflow-y-auto p-1">
-                      <p className="text-[10px] font-black text-blue-600 uppercase ml-1">Trabajos en este pedido:</p>
-                      {trabajos.map((t, idx) => (
-                        <div key={idx} className="flex justify-between items-center p-3 bg-blue-50 border border-blue-100 rounded-xl animate-in zoom-in-95 duration-200">
-                          <div className="text-[10px] font-bold">
-                            <span className="text-blue-700 uppercase">{t.servicio}</span> <br/> 
-                            {t.ancho}x{t.alto} • {t.cant} pz.
-                          </div>
-                          <button onClick={() => setTrabajos(trabajos.filter((_, i) => i !== idx))} className="bg-white text-red-500 h-8 w-8 rounded-full shadow-sm font-bold">✕</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-        {/* FORMULARIO PARA AGREGAR TRABAJO INDIVIDUAL */}
-<div className="p-5 rounded-3xl space-y-4 border-2 border-blue-100 bg-white shadow-md relative">
-  <div className="space-y-1">
-    <label className="text-[10px] font-black text-gray-400 ml-1 uppercase">Servicio</label>
-    <select
-      className="w-full p-3 rounded-xl border border-gray-200 text-sm font-bold bg-gray-50 outline-none appearance-none"
-      value={material}
-      onChange={(e) => setMaterial(e.target.value)}
-    >
-      <option value="">-- Elige un servicio --</option>
-      {listaServicios.map((s, i) => (
-        <option key={i} value={s}>{s}</option>
-      ))}
-    </select>
-  </div>
-
-  <div className="grid grid-cols-3 gap-2">
-    <div>
-      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Ancho</label>
-      <input id="ancho" type="text" placeholder="0.00" className="w-full p-3 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500" />
-    </div>
-    <div>
-      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Alto</label>
-      <input id="alto" type="text" placeholder="0.00" className="w-full p-3 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500" />
-    </div>
-    <div>
-      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Cant.</label>
-      <input id="cant" type="number" defaultValue="1" className="w-full p-3 rounded-xl text-sm font-bold border border-gray-100 outline-none focus:border-blue-500" />
-    </div>
-  </div>
-
-  {/* NUEVOS CAMPOS: PRECIO Y DETALLES POR TRABAJO */}
-  <div className="grid grid-cols-2 gap-2">
-    <div>
-      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Precio Unit.</label>
-      <input id="precio_unit" type="number" placeholder="0.00" className="w-full p-3 rounded-xl text-sm font-bold border border-blue-500 bg-blue-50 outline-none" />
-    </div>
-    <div>
-      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Detalle/Nota</label>
-      <input id="detalle_trabajo" type="text" placeholder="Ej: Ojales cada 50cm" className="w-full p-3 rounded-xl text-xs font-bold border border-gray-100 outline-none focus:border-blue-500" />
-    </div>
-  </div>
-
-  <button 
-    onClick={() => {
-      const s = material;
-      const an = (document.getElementById('ancho') as HTMLInputElement).value;
-      const al = (document.getElementById('alto') as HTMLInputElement).value;
-      const ct = (document.getElementById('cant') as HTMLInputElement).value;
-      const pr = (document.getElementById('precio_unit') as HTMLInputElement).value;
-      const dt = (document.getElementById('detalle_trabajo') as HTMLInputElement).value;
-      
-      if(!s || !an || !al || !pr) return alert("Por favor completa Servicio, Medidas y Precio");
-      
-      // Ahora guardamos el precio real y el detalle
-      setTrabajos([...trabajos, { 
-        servicio: s, 
-        ancho: an, 
-        alto: al, 
-        cant: ct, 
-        precio: Number(pr) * Number(ct), // Total de este item
-        detalle: dt 
-      }]);
-
-      // Limpiar inputs
-      setMaterial('');
-      (document.getElementById('ancho') as HTMLInputElement).value = '';
-      (document.getElementById('alto') as HTMLInputElement).value = '';
-      (document.getElementById('cant') as HTMLInputElement).value = '1';
-      (document.getElementById('precio_unit') as HTMLInputElement).value = '';
-      (document.getElementById('detalle_trabajo') as HTMLInputElement).value = '';
-    }}
-    className="w-full p-3 rounded-xl font-black text-[10px] bg-emerald-500 text-white uppercase shadow-lg active:scale-95 transition-all"
-  >
-    + AGREGAR OTRO TRABAJO
-  </button>
-</div>
-
-{/* SECCIÓN DE PAGO (ACUENTA Y SALDO) */}
-<div className="mt-4 p-5 bg-slate-800 rounded-3xl text-white shadow-xl space-y-3">
-  <div className="flex justify-between items-center border-b border-slate-700 pb-2">
-    <span className="text-[10px] font-black uppercase">Total Pedido:</span>
-    <span className="text-xl font-mono font-bold text-emerald-400">
-      {trabajos.reduce((acc, t) => acc + (t.precio || 0), 0).toFixed(2)} Bs.
-    </span>
-  </div>
-  
-  <div className="grid grid-cols-2 gap-4">
-    <div>
-      <label className="text-[9px] font-black text-slate-400 uppercase">A cuenta</label>
-      <input 
-        id="monto_acuenta" 
-        type="number" 
-        placeholder="0.00" 
-        className="w-full p-3 bg-slate-700 border-none rounded-xl text-white font-bold"
-        onChange={() => {
-          // Esto es opcional para calcular el saldo visualmente si quieres
-        }}
-      />
-    </div>
-    <div>
-      <label className="text-[9px] font-black text-slate-400 uppercase">Saldo Pendiente</label>
-      <div className="w-full p-3 bg-slate-900 rounded-xl text-red-400 font-bold text-center">
-        {/* El saldo se calcula restando el input del total */}
-        CALCULO AUTOMÁTICO
-      </div>
-    </div>
-  </div>
-</div>
-
-<button 
-  onClick={finalizarPedido}
-  className="w-full p-5 rounded-2xl font-black text-white shadow-2xl bg-blue-600 active:scale-95 transition-all mt-4 italic"
->
-  FINALIZAR PEDIDO COMPLETO
-</button>
+                  <button 
+                    onClick={finalizarPedido}
+                    className="w-full py-5 bg-blue-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl active:scale-95 transition-all mt-2 italic"
+                  >
+                    💾 Guardar y Finalizar Recibo
+                  </button>
                 </div>
               </div>
-            )}
-          </section>
-        )}
-      </div>
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+{/* ========================================== */}
+      {/* --- PESTAÑA PEDIDOS (ESTILO SOFT MINIMAL) --- */}
+      {/* ========================================== */}
+      {pestaña === 'pedidos' && (
+        <section className="animate-in fade-in duration-500 p-6 pb-32 bg-[#F8FAFC]">
+          {/* Header Simple */}
+          <div className="mb-8 flex justify-between items-center">
+            <div>
+              <h2 className="text-2xl font-semibold text-slate-800 tracking-tight">Cola de Diseño</h2>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Taller Activo</p>
+              </div>
+            </div>
+            <button onClick={cargarPedidosTaller} className="text-slate-400 hover:text-blue-600 p-2 transition-colors">
+              <span className="text-xl">🔄</span>
+            </button>
+          </div>
 
-      <nav className="fixed bottom-4 left-4 right-4 bg-white/90 backdrop-blur-md border border-gray-200 h-20 rounded-3xl flex justify-around items-center shadow-2xl z-50">
-        <button onClick={() => { setPestaña('inicio'); setAccionInicio('menu'); }} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'inicio' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
-          <span className="text-2xl font-bold italic">🏠</span>
-          <span className="text-[10px] font-black uppercase tracking-tighter">Inicio</span>
-        </button>
-        <button onClick={() => setPestaña('pedidos')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'pedidos' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
-          <span className="text-2xl font-bold italic">📋</span>
-          <span className="text-[10px] font-black uppercase tracking-tighter">Pedidos</span>
-        </button>
-        <button onClick={() => setPestaña('taller')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'taller' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
-          <span className="text-2xl font-bold italic">🖨️</span>
-          <span className="text-[10px] font-black uppercase tracking-tighter">Taller</span>
-        </button>
-        <button onClick={() => setPestaña('reportes')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'reportes' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
-          <span className="text-2xl font-bold italic">📊</span>
-          <span className="text-[10px] font-black uppercase tracking-tighter">Caja</span>
-        </button>
-      </nav>
-    </main>
-  );
+          <div className="space-y-4">
+            {Object.values(
+              listaPedidosTaller.reduce((acc: any, pedido: any) => {
+                if (!acc[pedido.nombre_cliente]) {
+                  const infoCliente = listaClientes.find(c => c.Nombre === pedido.nombre_cliente);
+                  acc[pedido.nombre_cliente] = { 
+                    nombre: pedido.nombre_cliente,
+                    telefono: infoCliente?.Telefono || '',
+                    tipo: infoCliente?.Tipo || 'Cliente',
+                    trabajos: [],
+                    total: 0, espera: 0, haciendo: 0, listos: 0
+                  };
+                }
+                acc[pedido.nombre_cliente].trabajos.push(pedido);
+                acc[pedido.nombre_cliente].total++;
+                if (pedido.estado === 'Pendiente') acc[pedido.nombre_cliente].espera++;
+                if (pedido.estado === 'Diseñando') acc[pedido.nombre_cliente].haciendo++;
+                if (pedido.estado === 'Para Imprimir' || pedido.estado === 'Finalizado') acc[pedido.nombre_cliente].listos++;
+                return acc;
+              }, {})
+            )
+            .filter((grupo: any) => grupo.listos < grupo.total)
+            .map((grupo: any, idx: number) => {
+              const abierto = clienteAbierto === grupo.nombre;
+
+              return (
+                <div key={idx} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all">
+                  
+                  {/* HEADER CLIENTE (SOFT) */}
+                  <div 
+                    onClick={() => setClienteAbierto(abierto ? null : grupo.nombre)}
+                    className={`p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition-colors ${abierto ? 'bg-slate-50/80 border-b border-slate-100' : ''}`}
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <h3 className="font-bold text-slate-800 text-base">{grupo.nombre}</h3>
+                        <span className="text-[9px] px-2 py-0.5 bg-slate-100 text-slate-500 rounded-md font-bold uppercase tracking-tighter">
+                          {grupo.tipo}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 font-medium">{grupo.telefono}</p>
+                    </div>
+
+                    {/* Resumen de estados en bolitas suaves */}
+                    <div className="flex gap-3 items-center mr-4">
+                      {grupo.espera > 0 && <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span><span className="text-[10px] font-bold text-slate-400">{grupo.espera}</span></div>}
+                      {grupo.haciendo > 0 && <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span><span className="text-[10px] font-bold text-orange-500">{grupo.haciendo}</span></div>}
+                      <div className="text-[10px] font-bold text-slate-300">/</div>
+                      <div className="text-[10px] font-black text-slate-800 bg-slate-100 px-2 py-1 rounded-md">{grupo.total}</div>
+                    </div>
+                    <span className={`text-slate-300 transition-transform ${abierto ? 'rotate-180' : ''}`}>▾</span>
+                  </div>
+
+                  {/* LISTA DE TRABAJOS (SOFT) */}
+                  {abierto && (
+                    <div className="p-3 space-y-2 bg-[#FCFDFF]">
+                      {grupo.trabajos.map((trabajo: any) => {
+                        const listo = trabajo.estado === 'Para Imprimir' || trabajo.estado === 'Finalizado';
+                        const doing = trabajo.estado === 'Diseñando';
+
+                        return (
+                          <div key={trabajo.id} className={`p-4 rounded-xl border transition-all ${listo ? 'bg-slate-50 border-slate-100' : 'bg-white border-slate-200 shadow-sm'}`}>
+                            <div className="flex justify-between items-start mb-4">
+                              <div>
+                                <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${listo ? 'text-slate-300' : 'text-blue-500'}`}>
+                                  {trabajo.servicio}
+                                </p>
+                                <h4 className={`text-sm font-semibold uppercase ${listo ? 'text-slate-300 line-through' : 'text-slate-700'}`}>
+                                  {trabajo.detalle || 'Trabajo sin detalle'}
+                                </h4>
+                                <p className="text-[10px] text-slate-400 font-medium mt-1">Dimensiones: {trabajo.ancho} x {trabajo.alto} m</p>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-xs font-bold text-slate-800 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                                  x{trabajo.cantidad}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex gap-2">
+                              {!listo ? (
+                                <>
+                                  <button 
+                                    onClick={() => cambiarEstadoPedido(trabajo.id, 'Pendiente')}
+                                    className={`flex-1 h-9 rounded-lg text-[10px] font-bold uppercase border transition-all ${trabajo.estado === 'Pendiente' ? 'bg-slate-100 border-slate-200 text-slate-600' : 'bg-white border-transparent text-slate-300'}`}
+                                  >
+                                    Espera
+                                  </button>
+                                  <button 
+                                    onClick={() => cambiarEstadoPedido(trabajo.id, 'Diseñando')}
+                                    className={`flex-1 h-9 rounded-lg text-[10px] font-bold uppercase border transition-all ${doing ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-transparent text-slate-300'}`}
+                                  >
+                                    Diseñar
+                                  </button>
+                                  <button 
+                                    onClick={() => { if(confirm("¿Finalizar diseño?")) cambiarEstadoPedido(trabajo.id, 'Para Imprimir') }}
+                                    className="px-4 h-9 rounded-lg bg-slate-900 text-white text-[10px] font-bold uppercase hover:bg-blue-600 transition-colors"
+                                  >
+                                    Listo
+                                  </button>
+                                </>
+                              ) : (
+                                <div className="w-full text-center py-1">
+                                  <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Enviado a Impresión</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+    {/* NAVEGACIÓN INFERIOR */}
+    <nav className="fixed bottom-4 left-4 right-4 bg-white/90 backdrop-blur-md border border-gray-200 h-20 rounded-3xl flex justify-around items-center shadow-2xl z-50">
+      <button onClick={() => { setPestaña('inicio'); setAccionInicio('menu'); }} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'inicio' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
+        <span className="text-2xl font-bold italic">🏠</span>
+        <span className="text-[10px] font-black uppercase tracking-tighter">Inicio</span>
+      </button>
+      <button onClick={() => setPestaña('pedidos')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'pedidos' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
+        <span className="text-2xl font-bold italic">📋</span>
+        <span className="text-[10px] font-black uppercase tracking-tighter">Pedidos</span>
+      </button>
+      <button onClick={() => setPestaña('taller')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'taller' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
+        <span className="text-2xl font-bold italic">🖨️</span>
+        <span className="text-[10px] font-black uppercase tracking-tighter">Taller</span>
+      </button>
+      <button onClick={() => setPestaña('reportes')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'reportes' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
+        <span className="text-2xl font-bold italic">📊</span>
+        <span className="text-[10px] font-black uppercase tracking-tighter">Caja</span>
+      </button>
+    </nav>
+  </main>
+);
 }
