@@ -4,25 +4,106 @@ import { useState, useEffect } from 'react';
 import { supabase } from './supabase';
 
 export default function Home() {
-  const [pestaña, setPestaña] = useState('inicio');
-  const [accionInicio, setAccionInicio] = useState('menu');
+// --- NAVEGACIÓN ---
+    const [pestaña, setPestaña] = useState('inicio');
+    const [accionInicio, setAccionInicio] = useState('menu');
 
-  // --- ESTADOS PARA TUS LISTAS DE CONTROL ---
-  const [listaServicios, setListaServicios] = useState<string[]>([]);
-  const [costosProduccion, setCostosProduccion] = useState([
-    { item: 'Tinta m2', precio: 2 },
-    { item: 'Ojalillos cien', precio: 15 }
-  ]);
-  const [nuevoServicioInput, setNuevoServicioInput] = useState('');
-  const [nuevoCostoInput, setNuevoCostoInput] = useState({ item: '', precio: '' });
+    // --- ESTADOS PARA TUS LISTAS DE CONTROL ---
+    const [listaServicios, setListaServicios] = useState<string[]>([]);
+    const [costosProduccion, setCostosProduccion] = useState([
+      { item: 'Tinta m2', precio: 2 },
+      { item: 'Ojalillos cien', precio: 15 }
+    ]);
+    const [nuevoServicioInput, setNuevoServicioInput] = useState('');
+    const [nuevoCostoInput, setNuevoCostoInput] = useState({ item: '', precio: '' });
 
-  // --- NUEVOS ESTADOS PARA CLIENTES (CONECTADOS A BD) ---
-  const [listaClientes, setListaClientes] = useState<any[]>([]);
-  const [nombreClienteInput, setNombreClienteInput] = useState('');
-  const [telClienteInput, setTelClienteInput] = useState('');
-  const [tipoClienteInput, setTipoClienteInput] = useState('Regular'); // <--- NUEVO ESTADO
+    // --- ESTADOS PARA CLIENTES ---
+    const [listaClientes, setListaClientes] = useState<any[]>([]);
+    const [nombreClienteInput, setNombreClienteInput] = useState('');
+    const [telClienteInput, setTelClienteInput] = useState('');
+    const [tipoClienteInput, setTipoClienteInput] = useState('Regular');
 
-  // --- CARGAR DATOS AL INICIAR (SERVICIOS Y CLIENTES) ---
+    // --- ESTADOS DE FORMULARIO Y TALLER ---
+    const [tipoCliente, setTipoCliente] = useState('nuevo');
+    const [material, setMaterial] = useState('');
+    const [trabajos, setTrabajos] = useState<any[]>([]); 
+    const [mostrarSugerencias, setMostrarSugerencias] = useState(false);
+    const [montoAcuenta, setMontoAcuenta] = useState<number | string>(0); // Cambiado para manejar inputs vacíos
+    const [listaPedidosTaller, setListaPedidosTaller] = useState<any[]>([]);
+    const [clienteAbierto, setClienteAbierto] = useState<string | null>(null);
+
+    // <<< ESTADO PARA GUARDAR LOS DATOS DE LA TABLA VENTAS (Saldos y Adelantos) >>>
+    const [listaVentas, setListaVentas] = useState<any[]>([]);
+
+    // --- ESTADOS PARA SUBIDA DE FOTOS (CLOUDINARY) ---
+    const [modalSubida, setModalSubida] = useState<{ abierto: boolean, pedidoId: number | null }>({ abierto: false, pedidoId: null });
+    const [previsualizacion, setPrevisualizacion] = useState<string | null>(null);
+    const [archivoSeleccionado, setArchivoSeleccionado] = useState<File | null>(null);
+    const [subiendo, setSubiendo] = useState(false);
+
+    // --- [ACTUALIZADO] ESTADOS PARA GESTIÓN DE GASTOS Y CAJA ---
+    const [misCategorias, setMisCategorias] = useState<any[]>([]);
+    const [nuevaCatNombre, setNuevaCatNombre] = useState('');
+    const [nuevaCatIcono, setNuevaCatIcono] = useState('💸');
+    const [gastoMonto, setGastoMonto] = useState<string>(''); // Mejor como string para el input
+    const [gastoCategoria, setGastoCategoria] = useState('');
+    const [gastoDetalle, setGastoDetalle] = useState('');
+    
+    // Estos estados guardarán los números finales de la caja del día
+    const [totalIngresosHoy, setTotalIngresosHoy] = useState<number>(0);
+    const [totalGastosHoy, setTotalGastosHoy] = useState<number>(0);
+
+// ==========================================
+  // --- FUNCIÓN PARA REFRESCAR TOTALES (NUEVO) ---
+  // ==========================================
+const refrescarTotalesHoy = async () => {
+  // 1. Definimos el inicio y el fin del día en la zona horaria local
+  const inicio = new Date();
+  inicio.setHours(0, 0, 0, 0);
+
+  const fin = new Date();
+  fin.setHours(23, 59, 59, 999);
+
+  // Convertimos a formato ISO que Supabase entiende perfectamente para Timestamps
+  const isoInicio = inicio.toISOString();
+  const isoFin = fin.toISOString();
+
+  console.log("Consultando desde:", isoInicio, "hasta:", isoFin);
+
+  // 2. Sumar Gastos
+  const { data: dataGastos, error: errG } = await supabase
+    .from('gastos')
+    .select('monto')
+    .gte('fecha', isoInicio)
+    .lte('fecha', isoFin);
+  
+  if (errG) console.error("Error Gastos:", errG);
+  const sumaGastos = dataGastos?.reduce((acc, g) => acc + (Number(g.monto) || 0), 0) || 0;
+  setTotalGastosHoy(sumaGastos);
+
+  // 3. Sumar Ingresos Inteligente
+  const { data: dataVentas, error: errV } = await supabase
+    .from('registro_ventas')
+    .select('cuenta, pedido_total, estado, saldo')
+    .gte('fecha', isoInicio)
+    .lte('fecha', isoFin);
+
+  const sumaIngresos = dataVentas?.reduce((acc, v) => {
+    // Si el pedido aún está pendiente, sumamos solo el adelanto (cuenta)
+    if (v.estado === 'Pendiente') {
+      return acc + (Number(v.cuenta) || 0);
+    } 
+    // Si el pedido ya se entregó hoy, el ingreso total es lo que pagó el cliente (pedido_total)
+    else {
+      return acc + (Number(v.pedido_total) || 0);
+    }
+  }, 0) || 0;
+
+  setTotalIngresosHoy(sumaIngresos);
+  }
+  // ==========================================
+  // --- CARGAR DATOS AL INICIAR ---
+  // ==========================================
   useEffect(() => {
     async function descargarDatos() {
       // Cargar Servicios
@@ -38,20 +119,107 @@ export default function Home() {
         .select('*')
         .order('Nombre', { ascending: true });
       if (dataClie) setListaClientes(dataClie);
+
+      // Cargar Categorías de Gastos
+      const { data: dataCats } = await supabase
+        .from('categorias_gastos')
+        .select('*')
+        .order('nombre', { ascending: true });
+      if (dataCats) setMisCategorias(dataCats);
+
+      // CARGAR TOTALES DEL DÍA AL EMPEZAR
+      refrescarTotalesHoy();
     }
     descargarDatos();
   }, []);
 
-  // --- FUNCIÓN GUARDAR CLIENTE EN BD ---
+  // ==========================================
+  // --- FUNCIONES DE GASTOS (ACTUALIZADO) ---
+  // ==========================================
+
+  const guardarCategoriaBD = async () => {
+    if (nuevaCatNombre.trim() === "") return alert("Escribe el nombre de la categoría");
+    
+    const { data, error } = await supabase
+      .from('categorias_gastos')
+      .insert([{ 
+        nombre: nuevaCatNombre.toUpperCase(), 
+        icono: nuevaCatIcono // <-- Ahora usa el icono que esté en el estado
+      }])
+      .select();
+
+    if (!error && data) {
+      setMisCategorias([...misCategorias, data[0]]);
+      setNuevaCatNombre('');
+      setNuevaCatIcono('💸'); // Reiniciamos al icono por defecto
+      alert("Categoría guardada correctamente");
+    } else {
+      alert("Error: " + error?.message);
+    }
+  };
+
+  const eliminarCategoria = async (id: number) => {
+    if (confirm("¿Realmente deseas eliminar esta categoría? Los gastos ya registrados no se borrarán, pero no podrás elegirla de nuevo.")) {
+      const { error } = await supabase
+        .from('categorias_gastos')
+        .delete()
+        .eq('id', id);
+        
+      if (!error) {
+        setMisCategorias(misCategorias.filter(c => c.id !== id));
+      } else {
+        alert("No se pudo eliminar: " + error.message);
+      }
+    }
+  };
+
+  const guardarGastoRealBD = async () => {
+    if (!gastoMonto || Number(gastoMonto) <= 0) return alert("Por favor, ingresa un monto válido");
+    if (!gastoCategoria) return alert("Debes seleccionar una categoría");
+
+    const { error } = await supabase
+      .from('gastos')
+      .insert([{
+        categoria: gastoCategoria,
+        monto: Number(gastoMonto),
+        descripcion: gastoDetalle.toUpperCase().trim(),
+        fecha: new Date().toISOString()
+      }]);
+
+    if (!error) {
+      // --- ESTO ES LO QUE FALTABA ---
+      await refrescarTotalesHoy(); 
+      // ------------------------------
+
+      alert("Gasto registrado correctamente 💸");
+      setGastoMonto('');
+      setGastoDetalle('');
+      setGastoCategoria('');
+      setAccionInicio('menu'); 
+    } else {
+      alert("Error al registrar el gasto: " + error.message);
+    }
+  };
+  // <<< FUNCIÓN PARA CARGAR LAS VENTAS (Indispensable para la pestaña de Entregas) >>>
+  const cargarDatosVentas = async () => {
+    const { data } = await supabase
+      .from('registro_ventas')
+      .select('*')
+      .eq('estado', 'Pendiente'); 
+    if (data) setListaVentas(data);
+  };
+
+  // ==========================================
+  // --- FUNCIONES DE CLIENTES ---
+  // ==========================================
   const guardarClienteBD = async () => {
     if (nombreClienteInput.trim() === "") return alert("El nombre es obligatorio");
-
     const { data, error } = await supabase
       .from('Clientes')
       .insert([{ 
         Nombre: nombreClienteInput.toUpperCase(), 
         Telefono: telClienteInput,
-        Tipo: tipoClienteInput // <--- AGREGADO EL TIPO
+        Tipo: tipoClienteInput 
       }])
       .select();
 
@@ -59,76 +227,44 @@ export default function Home() {
       setListaClientes([...listaClientes, data[0]]);
       setNombreClienteInput('');
       setTelClienteInput('');
-      setTipoClienteInput('Regular'); // Reset a default
+      setTipoClienteInput('Regular');
     } else {
-      alert("Error al guardar cliente: " + error.message);
+      alert("Error: " + error.message);
     }
   };
 
-  // --- FUNCIÓN ELIMINAR CLIENTE ---
   const eliminarCliente = async (id: number, nombre: string) => {
     if (confirm(`¿Eliminar a ${nombre}?`)) {
       const { error } = await supabase.from('Clientes').delete().eq('id', id);
-      if (!error) {
-        setListaClientes(listaClientes.filter(c => c.id !== id));
-      }
+      if (!error) setListaClientes(listaClientes.filter(c => c.id !== id));
     }
   };
 
-  // --- FUNCIONES DE SERVICIOS (MANTENIDAS) ---
-  const eliminarServicio = async (nombreEliminar: string) => {
-    if (confirm(`¿Estás seguro de eliminar "${nombreEliminar}"?`)) {
-      const { error } = await supabase.from('Servicios').delete().eq('Nombre', nombreEliminar);
-      if (!error) setListaServicios(listaServicios.filter(s => s !== nombreEliminar));
-    }
-  };
-
-  const editarServicio = async (nombreActual: string) => {
-    const nuevoNombre = prompt("Editar nombre del servicio:", nombreActual);
-    if (nuevoNombre && nuevoNombre.trim() !== "" && nuevoNombre !== nombreActual) {
-      const nombreMayus = nuevoNombre.toUpperCase();
-      const { error } = await supabase.from('Servicios').update({ Nombre: nombreMayus }).eq('Nombre', nombreActual);
-      if (!error) setListaServicios(listaServicios.map(s => s === nombreActual ? nombreMayus : s));
-    }
-  };
-
-  const guardarServicioBD = async () => {
-    if (nuevoServicioInput.trim() !== "") {
-      const nombreMayus = nuevoServicioInput.toUpperCase();
-      const { error } = await supabase.from('Servicios').insert([{ Nombre: nombreMayus }]);
-      if (!error) {
-        setListaServicios([...listaServicios, nombreMayus]);
-        setNuevoServicioInput('');
-      }
-    }
-  };
-
-  // --- ESTADOS ORIGINALES DE FORMULARIO ---
-  const [tipoCliente, setTipoCliente] = useState('nuevo');
-  const [material, setMaterial] = useState('');
-  const [trabajos, setTrabajos] = useState<any[]>([]); // <--- PEGA ESTA LÍNEA AQUÍ
-  const [mostrarSugerencias, setMostrarSugerencias] = useState(false);
-  const [montoAcuenta, setMontoAcuenta] = useState(0); // <--- PEGA ESTA AQUÍ
-  const [listaPedidosTaller, setListaPedidosTaller] = useState<any[]>([]);
-  const [clienteAbierto, setClienteAbierto] = useState<string | null>(null);
-  // ==========================================
-// --- FUNCIÓN MEJORADA: FINALIZAR PEDIDO (REPARTE EN 2 TABLAS) ---
-  const finalizarPedido = async () => {
+ const finalizarPedido = async () => {
+    // 1. Validaciones básicas
     if (trabajos.length === 0) return alert("Debes agregar al menos un trabajo");
     if (!nombreClienteInput) return alert("El nombre del cliente es obligatorio");
 
     try {
       const idPedidoActual = Date.now(); 
-      const totalActual = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
-      const saldoCalculado = totalActual - montoAcuenta;
-      const resumenDetalle = trabajos.map(t => 
-        `${t.cant} ${t.servicio.toUpperCase()} (${t.ancho}x${t.alto})`
-      ).join(" / ");
+      // Total de lo que se está agregando en este momento
+      const totalNuevoTrabajo = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
+      
+      // --- CREAR EL DESGLOSE INTELIGENTE (JSON) ---
+      const desglosePreciosNuevos = trabajos.map(t => ({
+        servicio: t.servicio.toUpperCase().trim(),
+        cantidad: Number(t.cant),
+        subtotal: Number(t.precio) 
+      }));
 
-      // PASO A: INSERTAR EN 'pedidos_activos' PARA EL TALLER
+      const resumenDetalleNuevo = trabajos.map(t => 
+        `${t.cant} ${t.servicio.toUpperCase()} (${t.ancho}x${t.alto})`
+      ).join(" // ");
+
+      // --- PASO A: INSERTAR EN 'pedidos_activos' (TALLER) ---
       const filasParaTaller = trabajos.map(t => ({
         id_pedido: idPedidoActual,
-        nombre_cliente: nombreClienteInput.toUpperCase(),
+        nombre_cliente: nombreClienteInput.toUpperCase().trim(),
         servicio: t.servicio,
         ancho: t.ancho,
         alto: t.alto,
@@ -140,64 +276,85 @@ export default function Home() {
       const { error: errorTaller } = await supabase.from('pedidos_activos').insert(filasParaTaller);
       if (errorTaller) throw errorTaller;
 
-      // PASO B: ACTUALIZAR O CREAR EN 'registro_ventas'
+      // --- PASO B: ACTUALIZAR O CREAR EN 'registro_ventas' (CAJA) ---
       const { data: pedidoExistente } = await supabase
         .from('registro_ventas')
         .select('*')
-        .eq('nombre_cliente', nombreClienteInput.toUpperCase())
+        .eq('nombre_cliente', nombreClienteInput.toUpperCase().trim())
         .eq('estado', 'Pendiente')
-        .single();
+        .maybeSingle();
 
       if (pedidoExistente) {
+        // 1. PREPARAR VALORES (Sumar lo viejo + lo nuevo)
+        const preciosPrevios = Array.isArray(pedidoExistente.detalle_precios) ? pedidoExistente.detalle_precios : [];
+        const nuevoDesgloseTotal = [...preciosPrevios, ...desglosePreciosNuevos];
+        
+        const nuevoTotalGlobal = Number(pedidoExistente.pedido_total) + totalNuevoTrabajo;
+        const nuevaCuentaGlobal = Number(pedidoExistente.cuenta) + Number(montoAcuenta);
+        
+        // CORRECCIÓN: Resta numérica segura
+        const nuevoSaldoGlobal = Number(nuevoTotalGlobal) - Number(nuevaCuentaGlobal);
+
+        // 2. ACTUALIZAR
         const { error: errorUpdate } = await supabase
           .from('registro_ventas')
           .update({
-            detalle_servicio: pedidoExistente.detalle_servicio + " // " + resumenDetalle,
-            pedido_total: pedidoExistente.pedido_total + totalActual,
-            cuenta: pedidoExistente.cuenta + montoAcuenta,
-            saldo: (pedidoExistente.pedido_total + totalActual) - (pedidoExistente.cuenta + montoAcuenta)
+            detalle_servicio: pedidoExistente.detalle_servicio + " // " + resumenDetalleNuevo,
+            detalle_precios: nuevoDesgloseTotal, 
+            pedido_total: nuevoTotalGlobal,
+            cuenta: nuevaCuentaGlobal,
+            saldo: nuevoSaldoGlobal
           })
           .eq('id_pedido', pedidoExistente.id_pedido);
+          
         if (errorUpdate) throw errorUpdate;
       } else {
+        // SI ES CLIENTE NUEVO (O nota nueva)
+        const totalVenta = totalNuevoTrabajo;
+        const cuentaVenta = Number(montoAcuenta);
+        const saldoVenta = Number(totalVenta) - Number(cuentaVenta);
+
         const { error: errorVenta } = await supabase
           .from('registro_ventas')
           .insert([{
             id_pedido: idPedidoActual,
-            nombre_cliente: nombreClienteInput.toUpperCase(),
+            nombre_cliente: nombreClienteInput.toUpperCase().trim(),
             telefono_cliente: telClienteInput,
-            detalle_servicio: resumenDetalle,
-            pedido_total: totalActual,
-            cuenta: montoAcuenta,
-            saldo: saldoCalculado,
+            detalle_servicio: resumenDetalleNuevo,
+            detalle_precios: desglosePreciosNuevos, 
+            pedido_total: totalVenta,
+            cuenta: cuentaVenta,
+            saldo: saldoVenta,
             estado: 'Pendiente'
           }]);
         if (errorVenta) throw errorVenta;
       }
 
-      alert("¡Pedido guardado y enviado al taller!");
+      // Actualizar totales de caja y limpiar
+      await refrescarTotalesHoy();
+      alert("¡Pedido guardado correctamente! 🚀");
+      
       setTrabajos([]);
       setNombreClienteInput('');
       setTelClienteInput('');
       setMontoAcuenta(0);
       setAccionInicio('menu');
+      cargarDatosVentas();
 
     } catch (err: any) {
-      console.error("Error completo:", err);
-      alert("Error: " + (err.message || "No se pudo guardar"));
+      console.error("Error al guardar:", err);
+      alert("Hubo un problema: " + err.message);
     }
-  };
+  }; // <--- AQUÍ CIERRA LA FUNCIÓN CORRECTAMENTE
 
   // ==========================================
-  // --- PASO 2: FUNCIONES DE CONTROL DE TALLER ---
+  // --- CONTROL DE TALLER ---
   // ==========================================
-  
   const cargarPedidosTaller = async () => {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('pedidos_activos')
       .select('*')
-      .neq('estado', 'Finalizado') 
-      .order('id', { ascending: true });
+      .order('id', { ascending: true }); // Traemos todos para poder filtrar en las vistas
     if (data) setListaPedidosTaller(data);
   };
 
@@ -206,17 +363,115 @@ export default function Home() {
       .from('pedidos_activos')
       .update({ estado: nuevoEstado })
       .eq('id', id);
-    if (!error) {
-      cargarPedidosTaller(); 
+    if (!error) cargarPedidosTaller(); 
+  };
+
+  // <<< FUNCIÓN PARA FINALIZAR ENTREGA (Limpia ambas tablas) >>>
+  const entregarPedidoFinal = async (nombreCliente: string) => {
+    try {
+      // 1. Marcar venta como Entregado
+      await supabase.from('registro_ventas').update({ estado: 'Entregado' })
+        .eq('nombre_cliente', nombreCliente).eq('estado', 'Pendiente');
+      
+      // 2. Archivar trabajos en taller
+      await supabase.from('pedidos_activos').update({ estado: 'Archivado' })
+        .eq('nombre_cliente', nombreCliente).eq('estado', 'Finalizado');
+
+      alert(`✅ Paquete de ${nombreCliente} entregado.`);
+      cargarPedidosTaller();
+      cargarDatosVentas();
+    } catch (err) { 
+      alert("Error en la entrega"); 
     }
   };
 
+  // ==========================================
+  // --- SUBIDA A CLOUDINARY ---
+  // ==========================================
+  const subirACloudinary = async (file: File, pedidoId: number) => {
+    setSubiendo(true); 
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('upload_preset', 'fotos_pedidos'); 
+
+    try {
+      const res = await fetch('https://api.cloudinary.com/v1_1/debs3gk6x/image/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (data.secure_url) {
+        const { error } = await supabase
+          .from('pedidos_activos')
+          .update({ url_foto: data.secure_url })
+          .eq('id', pedidoId);
+
+        if (!error) {
+          alert("¡Foto guardada! 📸");
+          setModalSubida({ abierto: false, pedidoId: null });
+          setPrevisualizacion(null);
+          setArchivoSeleccionado(null);
+          cargarPedidosTaller(); 
+        }
+      }
+    } catch (err) {
+      alert("Error de conexión con Cloudinary");
+    } finally {
+      setSubiendo(false); 
+    }
+  };
+
+  const manejarPegadoEnModal = (e: any) => {
+    if (!modalSubida.abierto) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf("image") !== -1) {
+        const file = items[i].getAsFile();
+        if (file) {
+          setArchivoSeleccionado(file);
+          setPrevisualizacion(URL.createObjectURL(file));
+        }
+      }
+    }
+  };
+
+  // <<< EFECTO DE CARGA SEGÚN PESTAÑA >>>
   useEffect(() => {
-    if (pestaña === 'pedidos') {
+    if (pestaña === 'pedidos' || pestaña === 'taller' || pestaña === 'reportes') {
       cargarPedidosTaller();
+      cargarDatosVentas();
     }
   }, [pestaña]);
-  return (
+
+  // --- FUNCIONES DE SERVICIOS ---
+  const eliminarServicio = async (nombreEliminar: string) => {
+    if (confirm(`¿Eliminar "${nombreEliminar}"?`)) {
+      const { error } = await supabase.from('Servicios').delete().eq('Nombre', nombreEliminar);
+      if (!error) setListaServicios(listaServicios.filter(s => s !== nombreEliminar));
+    }
+  };
+
+  const editarServicio = async (nombreActual: string) => {
+    const nuevoNombre = prompt("Editar nombre:", nombreActual);
+    if (nuevoNombre?.trim()) {
+      const nombreMayus = nuevoNombre.toUpperCase();
+      const { error } = await supabase.from('Servicios').update({ Nombre: nombreMayus }).eq('Nombre', nombreActual);
+      if (!error) setListaServicios(listaServicios.map(s => s === nombreActual ? nombreMayus : s));
+    }
+  };
+
+  const guardarServicioBD = async () => {
+    if (nuevoServicioInput.trim()) {
+      const nombreMayus = nuevoServicioInput.toUpperCase();
+      const { error } = await supabase.from('Servicios').insert([{ Nombre: nombreMayus }]);
+      if (!error) {
+        setListaServicios([...listaServicios, nombreMayus]);
+        setNuevoServicioInput('');
+      }
+    }
+  };
+ return (
     <main className="min-h-screen bg-gray-100 font-sans pb-24 text-slate-900">
 
       <header className="bg-white p-4 shadow-sm sticky top-0 z-10 flex justify-between items-center border-b border-gray-100">
@@ -233,15 +488,28 @@ export default function Home() {
 
             {accionInicio === 'menu' && (
               <>
-                <div className="grid grid-cols-2 gap-4 mb-8">
-                  <div className="bg-white p-4 rounded-2xl border-b-4 border-green-500 shadow-sm">
+                {/* --- SECCIÓN DE RESUMEN DE CAJA ACTUALIZADA --- */}
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="bg-white p-4 rounded-2xl border-b-4 border-green-500 shadow-sm transition-all">
                     <p className="text-[10px] uppercase font-bold text-gray-400">Hoy Ingresó</p>
-                    <p className="text-xl font-bold text-green-600 font-mono">0.00 Bs.</p>
+                    <p className="text-xl font-bold text-green-600 font-mono">
+                      {totalIngresosHoy.toFixed(2)} Bs.
+                    </p>
                   </div>
-                  <div className="bg-white p-4 rounded-2xl border-b-4 border-red-500 shadow-sm">
+                  <div className="bg-white p-4 rounded-2xl border-b-4 border-red-500 shadow-sm transition-all">
                     <p className="text-[10px] uppercase font-bold text-gray-400">Hoy Gastó</p>
-                    <p className="text-xl font-bold text-red-600 font-mono">0.00 Bs.</p>
+                    <p className="text-xl font-bold text-red-600 font-mono">
+                      {totalGastosHoy.toFixed(2)} Bs.
+                    </p>
                   </div>
+                </div>
+
+                {/* BARRA DE BALANCE NETO */}
+                <div className="bg-blue-600 p-3 rounded-2xl mb-8 shadow-md flex justify-between items-center px-6">
+                  <span className="text-white text-[10px] font-black uppercase tracking-widest">Balance Neto</span>
+                  <span className="text-white text-lg font-bold font-mono">
+                    {(totalIngresosHoy - totalGastosHoy).toFixed(2)} Bs.
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -249,10 +517,12 @@ export default function Home() {
                     <span className="text-4xl">💰</span>
                     <span className="font-bold text-sm">Cobrar Venta</span>
                   </button>
-                  <button className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
+                  
+                  <button onClick={() => setAccionInicio('nuevo-gasto')} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
                     <span className="text-4xl">💸</span>
                     <span className="font-bold text-sm">Gasto</span>
                   </button>
+
                   <button onClick={() => setAccionInicio('nuevo-cliente')} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
                     <span className="text-4xl">👤</span>
                     <span className="font-bold text-sm">Cliente</span>
@@ -265,12 +535,109 @@ export default function Home() {
                     <span className="text-3xl">⚙️</span>
                     <span className="font-bold text-[10px] uppercase text-center leading-tight">Lista de<br />Servicios</span>
                   </button>
-                  <button onClick={() => setAccionInicio('config-costos')} className="bg-slate-800 text-white p-6 rounded-3xl flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
+
+                  <button onClick={() => setAccionInicio('config-categorias-gastos')} className="bg-slate-800 text-white p-6 rounded-3xl flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
                     <span className="text-3xl">🛠️</span>
-                    <span className="font-bold text-[10px] uppercase text-center leading-tight">Costos de<br />Producción</span>
+                    <span className="font-bold text-[10px] uppercase text-center leading-tight">Categorías<br />de Gastos</span>
                   </button>
                 </div>
               </>
+            )}
+
+            {/* VISTA NUEVA: CONFIGURAR CATEGORÍAS DE GASTOS */}
+            {accionInicio === 'config-categorias-gastos' && (
+              <div className="bg-white p-6 rounded-3xl shadow-xl animate-in slide-in-from-bottom border border-slate-100">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-lg font-black uppercase text-slate-800 italic">Configurar Categorías</h3>
+                  <button onClick={() => setAccionInicio('menu')} className="bg-slate-100 p-2 rounded-full font-bold">✕</button>
+                </div>
+
+                <div className="bg-blue-50 p-4 rounded-2xl mb-6 border border-blue-100">
+                  <p className="text-[10px] font-black text-blue-400 uppercase mb-2 ml-1 tracking-widest">Crear Nueva</p>
+                  <div className="flex gap-2">
+                    <select 
+                      value={nuevaCatIcono} 
+                      onChange={(e) => setNuevaCatIcono(e.target.value)}
+                      className="bg-white border-none rounded-xl p-2 shadow-sm text-xl"
+                    >
+                      <option>💸</option><option>👤</option><option>⚡</option><option>🏗️</option><option>🧪</option><option>🍕</option>
+                    </select>
+                    <input 
+                      type="text" 
+                      value={nuevaCatNombre}
+                      onChange={(e) => setNuevoCostoInput({ ...nuevoCostoInput, item: e.target.value })} // O usa tu estado nuevaCatNombre si lo definiste
+                      onInput={(e:any) => setNuevaCatNombre(e.target.value)} 
+                      placeholder="Ej: ALQUILER" 
+                      className="flex-1 p-3 bg-white rounded-xl font-bold text-sm border-none shadow-sm outline-none"
+                    />
+                    <button onClick={guardarCategoriaBD} className="bg-blue-600 text-white px-5 rounded-xl font-bold">+</button>
+                  </div>
+                </div>
+
+                <div className="space-y-2 max-h-60 overflow-y-auto italic">
+                  {misCategorias.map((cat) => (
+                    <div key={cat.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
+                      <span className="text-xs font-bold uppercase text-slate-700">{cat.icono} {cat.nombre}</span>
+                      <button onClick={() => eliminarCategoria(cat.id)} className="text-red-400 text-[10px] font-black uppercase">Eliminar</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* VISTA NUEVA: REGISTRAR GASTO REAL */}
+            {accionInicio === 'nuevo-gasto' && (
+              <div className="bg-white p-6 rounded-[35px] shadow-2xl animate-in slide-in-from-bottom border border-slate-100">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-black text-red-600 uppercase italic">Anotar Gasto</h3>
+                  <button onClick={() => setAccionInicio('menu')} className="bg-slate-100 p-2 rounded-full font-bold text-slate-400">✕</button>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 shadow-inner">
+                    <label className="text-[10px] font-black text-slate-400 uppercase mb-1 block tracking-widest">Monto en Bs.</label>
+                    <input 
+                      type="number" 
+                      value={gastoMonto}
+                      onChange={(e) => setGastoMonto(e.target.value)}
+                      placeholder="0.00" 
+                      className="w-full bg-transparent border-none p-0 text-4xl font-black text-slate-800 outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {misCategorias.map((cat) => (
+                      <button
+                        key={cat.id}
+                        onClick={() => setGastoCategoria(cat.nombre)}
+                        className={`p-3 rounded-2xl font-bold text-[10px] uppercase transition-all border ${
+                          gastoCategoria === cat.nombre 
+                          ? 'bg-red-600 border-red-600 text-white shadow-lg scale-95' 
+                          : 'bg-white border-slate-100 text-slate-500'
+                        }`}
+                      >
+                        <span className="block text-xl mb-1">{cat.icono}</span>
+                        {cat.nombre}
+                      </button>
+                    ))}
+                  </div>
+
+                  <input 
+                    type="text" 
+                    value={gastoDetalle}
+                    onChange={(e) => setGastoDetalle(e.target.value)}
+                    placeholder="Detalle (Ej: Compra de tintas)" 
+                    className="w-full bg-slate-50 border-none rounded-2xl p-4 text-sm font-bold shadow-sm outline-none"
+                  />
+
+                  <button 
+                    onClick={guardarGastoRealBD}
+                    className="w-full bg-slate-900 text-white p-5 rounded-3xl font-black uppercase tracking-widest shadow-xl active:scale-95 transition-all mt-2"
+                  >
+                    Guardar Gasto 💸
+                  </button>
+                </div>
+              </div>
             )}
 
             {/* VISTA: CONFIGURAR SERVICIOS */}
@@ -585,7 +952,7 @@ export default function Home() {
                     <div className="space-y-1">
                       <label className="text-[9px] font-black text-red-500 uppercase ml-1 italic">Saldo Pendiente:</label>
                       <div className="w-full p-3 bg-red-50 border-2 border-red-100 rounded-2xl font-black text-red-600 text-center text-sm font-mono shadow-sm">
-                        {(trabajos.reduce((acc, t) => acc + (t.precio || 0), 0) - montoAcuenta).toFixed(2)}
+                        {(trabajos.reduce((acc, t) => acc + (t.precio || 0), 0) - Number(montoAcuenta)).toFixed(2)}
                       </div>
                     </div>
                   </div>
@@ -604,143 +971,387 @@ export default function Home() {
       )}
     </div>
 {/* ========================================== */}
-      {/* --- PESTAÑA PEDIDOS (ESTILO SOFT MINIMAL) --- */}
-      {/* ========================================== */}
-      {pestaña === 'pedidos' && (
-        <section className="animate-in fade-in duration-500 p-6 pb-32 bg-[#F8FAFC]">
-          {/* Header Simple */}
-          <div className="mb-8 flex justify-between items-center">
-            <div>
-              <h2 className="text-2xl font-semibold text-slate-800 tracking-tight">Cola de Diseño</h2>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Taller Activo</p>
+{/* --- PESTAÑA PEDIDOS (CORREGIDA CON FILTRO) --- */}
+{/* ========================================== */}
+{pestaña === 'pedidos' && (
+  <section className="animate-in fade-in duration-500 p-6 pb-32 bg-[#F8FAFC]">
+    {/* Header Simple */}
+    <div className="mb-8 flex justify-between items-center">
+      <div>
+        <h2 className="text-2xl font-semibold text-slate-800 tracking-tight">Cola de Diseño</h2>
+        <div className="flex items-center gap-2 mt-1">
+          <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">Taller Activo</p>
+        </div>
+      </div>
+      <button onClick={cargarPedidosTaller} className="text-slate-400 hover:text-blue-600 p-2 transition-colors">
+        <span className="text-xl">🔄</span>
+      </button>
+    </div>
+
+    <div className="space-y-4">
+      {Object.values(
+        listaPedidosTaller
+          // 🔥 CORRECCIÓN 1: Filtramos los archivados ANTES de empezar a agrupar
+          .filter((p: any) => p.estado !== 'Archivado')
+          .reduce((acc: any, pedido: any) => {
+            if (!acc[pedido.nombre_cliente]) {
+              const infoCliente = listaClientes.find(c => c.Nombre === pedido.nombre_cliente);
+              acc[pedido.nombre_cliente] = { 
+                nombre: pedido.nombre_cliente,
+                telefono: infoCliente?.Telefono || '',
+                tipo: infoCliente?.Tipo || 'Cliente',
+                trabajos: [],
+                total: 0, espera: 0, haciendo: 0, listos: 0
+              };
+            }
+            acc[pedido.nombre_cliente].trabajos.push(pedido);
+            acc[pedido.nombre_cliente].total++;
+            
+            // Contadores de etiquetas
+            if (pedido.estado === 'Pendiente') acc[pedido.nombre_cliente].espera++;
+            if (pedido.estado === 'Diseñando') acc[pedido.nombre_cliente].haciendo++;
+            if (pedido.estado === 'Para Imprimir' || pedido.estado === 'Finalizado') acc[pedido.nombre_cliente].listos++;
+            
+            return acc;
+          }, {})
+      )
+      // 🔥 CORRECCIÓN 2: El filtro final ahora solo muestra grupos que tienen trabajos pendientes de terminar
+      .filter((grupo: any) => grupo.listos < grupo.total)
+      .map((grupo: any, idx: number) => {
+        const abierto = clienteAbierto === grupo.nombre;
+
+        return (
+          <div key={idx} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all">
+            
+            {/* HEADER CLIENTE (Sin cambios, tu diseño es excelente) */}
+            <div 
+              onClick={() => setClienteAbierto(abierto ? null : grupo.nombre)}
+              className={`p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition-colors ${abierto ? 'bg-slate-50/80 border-b border-slate-100' : ''}`}
+            >
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <h3 className="font-bold text-slate-800 text-base">{grupo.nombre}</h3>
+                  <span className="text-[9px] px-2 py-0.5 bg-slate-100 text-slate-500 rounded-md font-bold uppercase tracking-tighter">
+                    {grupo.tipo}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 font-medium">{grupo.telefono}</p>
+              </div>
+
+              <div className="flex gap-3 items-center mr-4">
+                {grupo.espera > 0 && <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span><span className="text-[10px] font-bold text-slate-400">{grupo.espera}</span></div>}
+                {grupo.haciendo > 0 && <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span><span className="text-[10px] font-bold text-orange-500">{grupo.haciendo}</span></div>}
+                <div className="text-[10px] font-bold text-slate-300">/</div>
+                <div className="text-[10px] font-black text-slate-800 bg-slate-100 px-2 py-1 rounded-md">{grupo.total}</div>
+              </div>
+              <span className={`text-slate-300 transition-transform ${abierto ? 'rotate-180' : ''}`}>▾</span>
+            </div>
+
+            {/* LISTA DE TRABAJOS (Igual a tu código, pero ahora los datos vienen filtrados) */}
+            {abierto && (
+              <div className="p-3 space-y-2 bg-[#FCFDFF]">
+                {grupo.trabajos.map((trabajo: any) => {
+                  const listo = trabajo.estado === 'Para Imprimir' || trabajo.estado === 'Finalizado';
+                  const doing = trabajo.estado === 'Diseñando';
+
+                  return (
+                    <div key={trabajo.id} className={`p-4 rounded-xl border transition-all ${listo ? 'bg-slate-50 border-slate-100' : 'bg-white border-slate-200 shadow-sm'}`}>
+                      <div className="flex justify-between items-start mb-4">
+                        <div>
+                          <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${listo ? 'text-slate-300' : 'text-blue-500'}`}>
+                            {trabajo.servicio}
+                          </p>
+                          <h4 className={`text-sm font-semibold uppercase ${listo ? 'text-slate-300 line-through' : 'text-slate-700'}`}>
+                            {trabajo.detalle || 'Trabajo sin detalle'}
+                          </h4>
+                          <p className="text-[10px] text-slate-400 font-medium mt-1">Dimensiones: {trabajo.ancho} x {trabajo.alto} m</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs font-bold text-slate-800 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                            x{trabajo.cantidad}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Botón de subida y estados se mantienen igual... */}
+                      {!listo && (
+                         <div className="mb-4">
+                            <button 
+                              onClick={() => setModalSubida({ abierto: true, pedidoId: trabajo.id })}
+                              className={`w-full h-10 rounded-lg border-2 border-dashed flex items-center justify-center gap-2 transition-all ${trabajo.url_foto ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`}
+                            >
+                                <span className="text-lg">{trabajo.url_foto ? '✅' : '📸'}</span>
+                                <span className="text-[10px] font-black uppercase tracking-widest">{trabajo.url_foto ? 'Ver / Cambiar Captura' : 'Subir Captura (Ctrl+V)'}</span>
+                            </button>
+                         </div>
+                      )}
+
+                      <div className="flex gap-2">
+                        {!listo ? (
+                          <>
+                            <button onClick={() => cambiarEstadoPedido(trabajo.id, 'Pendiente')} className={`flex-1 h-9 rounded-lg text-[10px] font-bold uppercase border ${trabajo.estado === 'Pendiente' ? 'bg-slate-100 text-slate-600' : 'text-slate-300'}`}>Espera</button>
+                            <button onClick={() => cambiarEstadoPedido(trabajo.id, 'Diseñando')} className={`flex-1 h-9 rounded-lg text-[10px] font-bold uppercase border ${doing ? 'bg-orange-50 text-orange-600' : 'text-slate-300'}`}>Diseñar</button>
+                            <button onClick={() => { if(confirm("¿Finalizar diseño?")) cambiarEstadoPedido(trabajo.id, 'Para Imprimir') }} className="px-4 h-9 rounded-lg bg-slate-900 text-white text-[10px] font-bold uppercase">Listo</button>
+                          </>
+                        ) : (
+                          <div className="w-full text-center py-1">
+                            <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Enviado a Impresión</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  </section>
+)}
+{/* ========================================== */}
+{/* --- PESTAÑA TALLER (ENFOQUE VISUAL) --- */}
+{/* ========================================== */}
+{pestaña === 'taller' && (
+  <section className="animate-in fade-in duration-500 p-4 pb-32 bg-slate-900 min-h-screen">
+    <div className="mb-6 flex justify-between items-center">
+      <h2 className="text-xl font-black text-white uppercase tracking-tighter">Panel de Impresión</h2>
+      <button onClick={cargarPedidosTaller} className="bg-slate-800 text-slate-400 p-2 rounded-xl">🔄</button>
+    </div>
+
+    {/* Filtros Rápidos */}
+    <div className="grid grid-cols-2 gap-2 mb-6">
+      <div className="bg-slate-800 p-3 rounded-2xl border border-slate-700">
+        <p className="text-[10px] font-bold text-slate-500 uppercase">Pendientes</p>
+        <p className="text-xl font-black text-white">{listaPedidosTaller.filter(p => p.estado === 'Para Imprimir').length}</p>
+      </div>
+      <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-900/20">
+        <p className="text-[10px] font-bold text-blue-200 uppercase">En Máquina</p>
+        <p className="text-xl font-black text-white">{listaPedidosTaller.filter(p => p.estado === 'Imprimiendo').length}</p>
+      </div>
+    </div>
+
+    <div className="grid grid-cols-1 gap-4">
+      {listaPedidosTaller
+        .filter(p => p.estado === 'Para Imprimir' || p.estado === 'Imprimiendo')
+        .map((trabajo) => (
+          <div key={trabajo.id} className={`relative overflow-hidden rounded-[32px] border-2 transition-all ${trabajo.estado === 'Imprimiendo' ? 'border-blue-500 bg-slate-800' : 'border-slate-800 bg-slate-800/50'}`}>
+            
+            {/* Imagen de Fondo o Preview */}
+            <div className="h-48 bg-slate-700 relative">
+              {trabajo.url_foto ? (
+                <img 
+                  src={trabajo.url_foto} 
+                  className="w-full h-full object-cover opacity-60" 
+                  onClick={() => window.open(trabajo.url_foto, '_blank')}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-slate-500 italic text-xs uppercase font-bold">Sin Captura</div>
+              )}
+              
+              {/* Badge de Medida Flotante */}
+              <div className="absolute top-4 left-4 bg-white px-3 py-1.5 rounded-full shadow-xl">
+                <p className="text-[12px] font-black text-slate-900 italic">{trabajo.ancho} x {trabajo.alto} m</p>
               </div>
             </div>
-            <button onClick={cargarPedidosTaller} className="text-slate-400 hover:text-blue-600 p-2 transition-colors">
-              <span className="text-xl">🔄</span>
-            </button>
-          </div>
 
-          <div className="space-y-4">
-            {Object.values(
-              listaPedidosTaller.reduce((acc: any, pedido: any) => {
-                if (!acc[pedido.nombre_cliente]) {
-                  const infoCliente = listaClientes.find(c => c.Nombre === pedido.nombre_cliente);
-                  acc[pedido.nombre_cliente] = { 
-                    nombre: pedido.nombre_cliente,
-                    telefono: infoCliente?.Telefono || '',
-                    tipo: infoCliente?.Tipo || 'Cliente',
-                    trabajos: [],
-                    total: 0, espera: 0, haciendo: 0, listos: 0
-                  };
-                }
-                acc[pedido.nombre_cliente].trabajos.push(pedido);
-                acc[pedido.nombre_cliente].total++;
-                if (pedido.estado === 'Pendiente') acc[pedido.nombre_cliente].espera++;
-                if (pedido.estado === 'Diseñando') acc[pedido.nombre_cliente].haciendo++;
-                if (pedido.estado === 'Para Imprimir' || pedido.estado === 'Finalizado') acc[pedido.nombre_cliente].listos++;
-                return acc;
-              }, {})
-            )
-            .filter((grupo: any) => grupo.listos < grupo.total)
-            .map((grupo: any, idx: number) => {
-              const abierto = clienteAbierto === grupo.nombre;
-
-              return (
-                <div key={idx} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all">
-                  
-                  {/* HEADER CLIENTE (SOFT) */}
-                  <div 
-                    onClick={() => setClienteAbierto(abierto ? null : grupo.nombre)}
-                    className={`p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition-colors ${abierto ? 'bg-slate-50/80 border-b border-slate-100' : ''}`}
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <h3 className="font-bold text-slate-800 text-base">{grupo.nombre}</h3>
-                        <span className="text-[9px] px-2 py-0.5 bg-slate-100 text-slate-500 rounded-md font-bold uppercase tracking-tighter">
-                          {grupo.tipo}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-400 font-medium">{grupo.telefono}</p>
-                    </div>
-
-                    {/* Resumen de estados en bolitas suaves */}
-                    <div className="flex gap-3 items-center mr-4">
-                      {grupo.espera > 0 && <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span><span className="text-[10px] font-bold text-slate-400">{grupo.espera}</span></div>}
-                      {grupo.haciendo > 0 && <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span><span className="text-[10px] font-bold text-orange-500">{grupo.haciendo}</span></div>}
-                      <div className="text-[10px] font-bold text-slate-300">/</div>
-                      <div className="text-[10px] font-black text-slate-800 bg-slate-100 px-2 py-1 rounded-md">{grupo.total}</div>
-                    </div>
-                    <span className={`text-slate-300 transition-transform ${abierto ? 'rotate-180' : ''}`}>▾</span>
-                  </div>
-
-                  {/* LISTA DE TRABAJOS (SOFT) */}
-                  {abierto && (
-                    <div className="p-3 space-y-2 bg-[#FCFDFF]">
-                      {grupo.trabajos.map((trabajo: any) => {
-                        const listo = trabajo.estado === 'Para Imprimir' || trabajo.estado === 'Finalizado';
-                        const doing = trabajo.estado === 'Diseñando';
-
-                        return (
-                          <div key={trabajo.id} className={`p-4 rounded-xl border transition-all ${listo ? 'bg-slate-50 border-slate-100' : 'bg-white border-slate-200 shadow-sm'}`}>
-                            <div className="flex justify-between items-start mb-4">
-                              <div>
-                                <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${listo ? 'text-slate-300' : 'text-blue-500'}`}>
-                                  {trabajo.servicio}
-                                </p>
-                                <h4 className={`text-sm font-semibold uppercase ${listo ? 'text-slate-300 line-through' : 'text-slate-700'}`}>
-                                  {trabajo.detalle || 'Trabajo sin detalle'}
-                                </h4>
-                                <p className="text-[10px] text-slate-400 font-medium mt-1">Dimensiones: {trabajo.ancho} x {trabajo.alto} m</p>
-                              </div>
-                              <div className="text-right">
-                                <span className="text-xs font-bold text-slate-800 bg-slate-50 px-2 py-1 rounded border border-slate-100">
-                                  x{trabajo.cantidad}
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="flex gap-2">
-                              {!listo ? (
-                                <>
-                                  <button 
-                                    onClick={() => cambiarEstadoPedido(trabajo.id, 'Pendiente')}
-                                    className={`flex-1 h-9 rounded-lg text-[10px] font-bold uppercase border transition-all ${trabajo.estado === 'Pendiente' ? 'bg-slate-100 border-slate-200 text-slate-600' : 'bg-white border-transparent text-slate-300'}`}
-                                  >
-                                    Espera
-                                  </button>
-                                  <button 
-                                    onClick={() => cambiarEstadoPedido(trabajo.id, 'Diseñando')}
-                                    className={`flex-1 h-9 rounded-lg text-[10px] font-bold uppercase border transition-all ${doing ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-transparent text-slate-300'}`}
-                                  >
-                                    Diseñar
-                                  </button>
-                                  <button 
-                                    onClick={() => { if(confirm("¿Finalizar diseño?")) cambiarEstadoPedido(trabajo.id, 'Para Imprimir') }}
-                                    className="px-4 h-9 rounded-lg bg-slate-900 text-white text-[10px] font-bold uppercase hover:bg-blue-600 transition-colors"
-                                  >
-                                    Listo
-                                  </button>
-                                </>
-                              ) : (
-                                <div className="w-full text-center py-1">
-                                  <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Enviado a Impresión</span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+            {/* Datos del Trabajo */}
+            <div className="p-5">
+              <div className="flex justify-between items-start mb-3">
+                <div className="max-w-[70%]">
+                  <p className="text-blue-400 text-[10px] font-black uppercase tracking-widest">{trabajo.servicio}</p>
+                  <h3 className="text-white font-bold text-lg leading-tight truncate">{trabajo.nombre_cliente}</h3>
+                  <p className="text-slate-400 text-xs mt-1 font-medium">{trabajo.detalle || 'Sin observaciones'}</p>
                 </div>
-              );
-            })}
+                <div className="bg-slate-900 px-3 py-2 rounded-2xl border border-slate-700 text-center">
+                  <p className="text-[9px] font-bold text-slate-500 uppercase">Cant.</p>
+                  <p className="text-lg font-black text-white">x{trabajo.cantidad}</p>
+                </div>
+              </div>
+
+           {/* Botones de Estado para el Trabajador */}
+<div className="flex gap-2 mt-4">
+  {trabajo.estado === 'Para Imprimir' ? (
+    <button 
+      onClick={() => cambiarEstadoPedido(trabajo.id, 'Imprimiendo')}
+      className="flex-1 h-14 bg-blue-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-lg shadow-blue-900/40 active:scale-95 transition-all"
+    >
+      ⏺ Iniciar Impresión
+    </button>
+  ) : (
+    <button 
+      onClick={() => { 
+        if(confirm(`¿Confirmas que la impresión de "${trabajo.nombre_cliente}" está lista?`)) { 
+          cambiarEstadoPedido(trabajo.id, 'Finalizado') 
+        } 
+      }}
+      className="flex-1 h-14 bg-emerald-500 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-lg shadow-emerald-900/40 active:scale-95 transition-all flex flex-col items-center justify-center leading-none"
+    >
+      <span className="text-[9px] opacity-70 mb-1">EN MÁQUINA...</span>
+      <span>✅ Terminar Trabajo</span>
+    </button>
+  )}
+  
+  {/* Botón para ver foto completa */}
+  {trabajo.url_foto && (
+    <button 
+      onClick={() => window.open(trabajo.url_foto, '_blank')}
+      className="w-14 h-14 bg-slate-700 text-white rounded-2xl flex items-center justify-center text-xl hover:bg-slate-600 transition-colors"
+    >
+      🖼️
+    </button>
+  )}
+</div>
+            </div>
           </div>
-        </section>
+        ))}
+
+      {/* Mensaje si no hay nada para imprimir */}
+      {listaPedidosTaller.filter(p => p.estado === 'Para Imprimir' || p.estado === 'Imprimiendo').length === 0 && (
+        <div className="py-20 text-center">
+          <p className="text-slate-600 font-black uppercase tracking-[4px] text-sm">Todo al día</p>
+          <p className="text-slate-800 text-4xl mt-2 italic">☕</p>
+        </div>
       )}
-    {/* NAVEGACIÓN INFERIOR */}
+    </div>
+  </section>
+)}
+{/* ========================================== */}
+{/* --- PESTAÑA DESPACHO (ENTREGAS Y COBROS) --- */}
+{/* ========================================== */}
+{pestaña === 'reportes' && (
+  <section className="animate-in fade-in duration-500 p-4 pb-32 bg-[#F8FAFC] min-h-screen">
+    <div className="mb-6">
+      <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic">Paquetes Listos</h2>
+      <div className="flex items-center gap-2 mt-1">
+        <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></span>
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Control de Salida y Saldos</p>
+      </div>
+    </div>
+
+    <div className="space-y-4">
+      {Object.values(
+        listaPedidosTaller
+          .filter(p => p.estado === 'Finalizado')
+          .reduce((acc: any, pedido: any) => {
+            if (!acc[pedido.nombre_cliente]) {
+              // BUSQUEDA CORRECTA: Usamos el nombre del cliente para cruzar con registro_ventas
+              const ventaOriginal = listaVentas.find(v => v.nombre_cliente === pedido.nombre_cliente);
+              
+              acc[pedido.nombre_cliente] = { 
+                nombre: pedido.nombre_cliente,
+                trabajosTaller: [], // Estos son los físicos que están en taller
+                // DATOS FINANCIEROS REALES (Vienen de la tabla ventas)
+                totalVenta: ventaOriginal?.pedido_total || 0,
+                adelanto: ventaOriginal?.cuenta || 0,
+                saldo: ventaOriginal?.saldo || 0,
+                // DESGLOSE PARA EXCEL/DETALLE (Viene de nuestro nuevo JSONB)
+                desglosePrecios: ventaOriginal?.detalle_precios || []
+              };
+            }
+            acc[pedido.nombre_cliente].trabajosTaller.push(pedido);
+            return acc;
+          }, {})
+      ).map((grupo: any, idx: number) => {
+        // El saldo ya viene calculado desde la DB, pero lo aseguramos
+        const saldoPendiente = grupo.saldo;
+        const estaPagado = saldoPendiente <= 0;
+
+        return (
+          <div key={idx} className="bg-white rounded-[35px] shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
+            {/* CABECERA: CLIENTE Y FOTOS */}
+            <div className="p-5 bg-white">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h3 className="text-xl font-black text-slate-800 uppercase leading-none">{grupo.nombre}</h3>
+                  <p className="text-[10px] font-bold text-blue-500 mt-2 uppercase tracking-widest">Contenido del Paquete:</p>
+                </div>
+                <div className="bg-slate-100 px-3 py-1 rounded-full text-[10px] font-black text-slate-500 uppercase">
+                  {grupo.trabajosTaller.length} piezas
+                </div>
+              </div>
+
+              {/* TIRA DE IMÁGENES */}
+              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                {grupo.trabajosTaller.map((t: any) => (
+                  <div key={t.id} className="relative flex-shrink-0 w-20 h-20 rounded-2xl border border-slate-200 overflow-hidden bg-slate-50">
+                    {t.url_foto ? (
+                      <img 
+                        src={t.url_foto} 
+                        className="w-full h-full object-cover" 
+                        onClick={() => window.open(t.url_foto, '_blank')} 
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-[20px]">🖼️</div>
+                    )}
+                    <div className="absolute bottom-0 right-0 bg-black/60 text-white text-[8px] px-1 font-bold">
+                      {t.ancho}x{t.alto}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* DETALLE DE PRECIOS (Extraído del JSONB guardado en Ventas) */}
+            <div className="px-5 py-3 bg-slate-50 space-y-2 border-t border-slate-100">
+              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Costo Detallado:</p>
+              {grupo.desglosePrecios.map((item: any, i: number) => (
+                <div key={i} className="flex justify-between items-center text-[11px]">
+                  <span className="text-slate-500 font-bold uppercase truncate max-w-[180px]">
+                    {item.servicio} (x{item.cantidad})
+                  </span>
+                  <span className="font-black text-slate-700">{item.subtotal} Bs.</span>
+                </div>
+              ))}
+            </div>
+
+            {/* RESUMEN FINANCIERO */}
+            <div className="p-5 bg-white border-t border-slate-50">
+              <div className="grid grid-cols-3 gap-2 mb-4 text-center">
+                <div className="bg-slate-50 p-2 rounded-2xl">
+                  <p className="text-[8px] font-bold text-slate-400 uppercase">Total</p>
+                  <p className="text-xs font-black text-slate-800">{grupo.totalVenta} Bs.</p>
+                </div>
+                <div className="bg-blue-50 p-2 rounded-2xl border border-blue-100">
+                  <p className="text-[8px] font-bold text-blue-400 uppercase">Adelanto</p>
+                  <p className="text-xs font-black text-blue-600">{grupo.adelanto} Bs.</p>
+                </div>
+                <div className={`p-2 rounded-2xl border ${estaPagado ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+                  <p className={`text-[8px] font-bold uppercase ${estaPagado ? 'text-emerald-400' : 'text-red-400'}`}>Saldo</p>
+                  <p className={`text-xs font-black ${estaPagado ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {estaPagado ? 'PAGADO' : `${saldoPendiente} Bs.`}
+                  </p>
+                </div>
+              </div>
+
+              {/* ACCIÓN FINAL */}
+              <button 
+                onClick={() => entregarPedidoFinal(grupo.nombre)}
+                className={`w-full h-14 rounded-[22px] font-black text-[11px] uppercase tracking-widest transition-all ${
+                  estaPagado 
+                  ? 'bg-slate-900 text-white shadow-lg shadow-slate-200' 
+                  : 'bg-red-600 text-white shadow-lg shadow-red-200 animate-pulse'
+                }`}
+              >
+                {estaPagado ? '📦 Entregar ahora' : `💰 Cobrar ${saldoPendiente} Bs. y Entregar`}
+              </button>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Vacío */}
+      {listaPedidosTaller.filter(p => p.estado === 'Finalizado').length === 0 && (
+        <div className="py-24 text-center">
+          <p className="text-slate-300 font-black uppercase tracking-[5px] text-xs">Nada pendiente</p>
+        </div>
+      )}
+    </div>
+  </section>
+)}
+  {/* NAVEGACIÓN INFERIOR */}
     <nav className="fixed bottom-4 left-4 right-4 bg-white/90 backdrop-blur-md border border-gray-200 h-20 rounded-3xl flex justify-around items-center shadow-2xl z-50">
       <button onClick={() => { setPestaña('inicio'); setAccionInicio('menu'); }} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'inicio' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
         <span className="text-2xl font-bold italic">🏠</span>
@@ -754,11 +1365,77 @@ export default function Home() {
         <span className="text-2xl font-bold italic">🖨️</span>
         <span className="text-[10px] font-black uppercase tracking-tighter">Taller</span>
       </button>
+      {/* --- ESTE ES EL BOTÓN QUE CAMBIAMOS --- */}
       <button onClick={() => setPestaña('reportes')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'reportes' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
-        <span className="text-2xl font-bold italic">📊</span>
-        <span className="text-[10px] font-black uppercase tracking-tighter">Caja</span>
+        <span className="text-2xl font-bold italic">📦</span>
+        <span className="text-[10px] font-black uppercase tracking-tighter">Entregas</span>
       </button>
     </nav>
+
+    {/* --- AQUÍ ESTABA EL ERROR: FALTABA PEGAR ESTO --- */}
+    {modalSubida.abierto && (
+      <div 
+        className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4"
+        onPaste={manejarPegadoEnModal}
+      >
+        <div className="bg-white w-full max-w-md rounded-[32px] p-6 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+          <div className="flex justify-between items-center mb-5">
+            <div>
+              <h3 className="font-black text-slate-800 uppercase tracking-tighter text-xl">Subir Diseño</h3>
+              <p className="text-[10px] text-blue-500 font-bold uppercase tracking-widest">Pedido ID: #{modalSubida.pedidoId}</p>
+            </div>
+            <button 
+              onClick={() => { setModalSubida({abierto: false, pedidoId: null}); setPrevisualizacion(null); setArchivoSeleccionado(null); }} 
+              className="w-10 h-10 flex items-center justify-center bg-slate-100 rounded-full text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors font-bold"
+            >✕</button>
+          </div>
+
+          <div className="border-2 border-dashed border-slate-200 rounded-3xl h-72 flex flex-col items-center justify-center bg-slate-50 overflow-hidden relative">
+            {previsualizacion ? (
+              <img src={previsualizacion} alt="Preview" className="w-full h-full object-contain p-2" />
+            ) : (
+              <div className="text-center p-8">
+                <div className="w-20 h-20 bg-white rounded-3xl shadow-sm flex items-center justify-center mx-auto mb-4 text-4xl">🖼️</div>
+                <p className="text-[12px] font-black text-slate-400 uppercase tracking-[2px] mb-2">
+                  Presiona <span className="text-blue-600 font-bold">CTRL + V</span>
+                </p>
+                <p className="text-[10px] text-slate-300 font-bold uppercase tracking-widest leading-relaxed">Pega la captura aquí o usa el botón de abajo</p>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-6 flex gap-3">
+            <input 
+              type="file" accept="image/*" className="hidden" id="file-upload-modal"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) { 
+                  setArchivoSeleccionado(file); 
+                  setPrevisualizacion(URL.createObjectURL(file)); 
+                }
+              }} 
+            />
+            <button 
+              onClick={() => document.getElementById('file-upload-modal')?.click()}
+              className="flex-1 h-16 bg-slate-100 text-slate-600 rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-slate-200"
+            >
+              {previsualizacion ? 'Cambiar' : '📁 Archivo'}
+            </button>
+            {archivoSeleccionado && (
+              <button 
+                disabled={subiendo}
+                onClick={() => modalSubida.pedidoId && subirACloudinary(archivoSeleccionado, modalSubida.pedidoId)}
+                className={`flex-[2] h-16 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all ${
+                  subiendo ? 'bg-slate-400' : 'bg-blue-600 text-white hover:bg-blue-700'
+                }`}
+              >
+                {subiendo ? 'Subiendo...' : '🚀 Confirmar Subida'}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
   </main>
 );
 }
