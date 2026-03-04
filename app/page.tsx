@@ -2,57 +2,120 @@
 import { useState, useEffect } from 'react';
 // 1. Importamos la conexión
 import { supabase } from './supabase';
+// <<< AÑADE ESTO AQUÍ >>>
+import { 
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, 
+  ResponsiveContainer, PieChart, Pie, Cell 
+} from 'recharts';
+
 
 export default function Home() {
 // --- NAVEGACIÓN ---
-    const [pestaña, setPestaña] = useState('inicio');
-    const [accionInicio, setAccionInicio] = useState('menu');
+const [pestaña, setPestaña] = useState('inicio');
+const [accionInicio, setAccionInicio] = useState('menu');
 
-    // --- ESTADOS PARA TUS LISTAS DE CONTROL ---
-    const [listaServicios, setListaServicios] = useState<string[]>([]);
-    const [costosProduccion, setCostosProduccion] = useState([
-      { item: 'Tinta m2', precio: 2 },
-      { item: 'Ojalillos cien', precio: 15 }
-    ]);
-    const [nuevoServicioInput, setNuevoServicioInput] = useState('');
-    const [nuevoCostoInput, setNuevoCostoInput] = useState({ item: '', precio: '' });
+// --- [NUEVO] ESTADO PARA SELECCIÓN DE PEDIDOS (ENTREGA SELECTIVA) ---
+// Guardamos los IDs de los trabajos que el cliente se está llevando físicamente
+const [pedidosSeleccionados, setPedidosSeleccionados] = useState<number[]>([]);
 
-    // --- ESTADOS PARA CLIENTES ---
-    const [listaClientes, setListaClientes] = useState<any[]>([]);
-    const [nombreClienteInput, setNombreClienteInput] = useState('');
-    const [telClienteInput, setTelClienteInput] = useState('');
-    const [tipoClienteInput, setTipoClienteInput] = useState('Regular');
+// --- ESTADOS PARA TUS LISTAS DE CONTROL ---
+const [listaServicios, setListaServicios] = useState<string[]>([]);
+const [costosProduccion, setCostosProduccion] = useState([
+  { item: 'Tinta m2', precio: 2 },
+  { item: 'Ojalillos cien', precio: 15 }
+]);
+const [nuevoServicioInput, setNuevoServicioInput] = useState('');
+const [nuevoCostoInput, setNuevoCostoInput] = useState({ item: '', precio: '' });
 
-    // --- ESTADOS DE FORMULARIO Y TALLER ---
-    const [tipoCliente, setTipoCliente] = useState('nuevo');
-    const [material, setMaterial] = useState('');
-    const [trabajos, setTrabajos] = useState<any[]>([]); 
-    const [mostrarSugerencias, setMostrarSugerencias] = useState(false);
-    const [montoAcuenta, setMontoAcuenta] = useState<number | string>(0); // Cambiado para manejar inputs vacíos
-    const [listaPedidosTaller, setListaPedidosTaller] = useState<any[]>([]);
-    const [clienteAbierto, setClienteAbierto] = useState<string | null>(null);
+// --- ESTADOS PARA CLIENTES ---
+const [listaClientes, setListaClientes] = useState<any[]>([]);
+const [nombreClienteInput, setNombreClienteInput] = useState('');
+const [telClienteInput, setTelClienteInput] = useState('');
+const [tipoClienteInput, setTipoClienteInput] = useState('Regular');
 
-    // <<< ESTADO PARA GUARDAR LOS DATOS DE LA TABLA VENTAS (Saldos y Adelantos) >>>
-    const [listaVentas, setListaVentas] = useState<any[]>([]);
+// --- ESTADOS DE FORMULARIO Y TALLER ---
+const [tipoCliente, setTipoCliente] = useState('nuevo');
+const [material, setMaterial] = useState('');
+const [trabajos, setTrabajos] = useState<any[]>([]); 
+const [mostrarSugerencias, setMostrarSugerencias] = useState(false);
+const [montoAcuenta, setMontoAcuenta] = useState<number | string>(0);
+const [listaPedidosTaller, setListaPedidosTaller] = useState<any[]>([]);
+const [clienteAbierto, setClienteAbierto] = useState<string | null>(null);
 
-    // --- ESTADOS PARA SUBIDA DE FOTOS (CLOUDINARY) ---
-    const [modalSubida, setModalSubida] = useState<{ abierto: boolean, pedidoId: number | null }>({ abierto: false, pedidoId: null });
-    const [previsualizacion, setPrevisualizacion] = useState<string | null>(null);
-    const [archivoSeleccionado, setArchivoSeleccionado] = useState<File | null>(null);
-    const [subiendo, setSubiendo] = useState(false);
+// --- ESTADO PARA GUARDAR LOS DATOS DE LA TABLA VENTAS ---
+const [listaVentas, setListaVentas] = useState<any[]>([]);
 
-    // --- [ACTUALIZADO] ESTADOS PARA GESTIÓN DE GASTOS Y CAJA ---
-    const [misCategorias, setMisCategorias] = useState<any[]>([]);
-    const [nuevaCatNombre, setNuevaCatNombre] = useState('');
-    const [nuevaCatIcono, setNuevaCatIcono] = useState('💸');
-    const [gastoMonto, setGastoMonto] = useState<string>(''); // Mejor como string para el input
-    const [gastoCategoria, setGastoCategoria] = useState('');
-    const [gastoDetalle, setGastoDetalle] = useState('');
+// --- ESTADOS PARA SUBIDA DE FOTOS (CLOUDINARY) ---
+const [modalSubida, setModalSubida] = useState<{ abierto: boolean, pedidoId: number | null }>({ abierto: false, pedidoId: null });
+const [previsualizacion, setPrevisualizacion] = useState<string | null>(null);
+const [archivoSeleccionado, setArchivoSeleccionado] = useState<File | null>(null);
+const [subiendo, setSubiendo] = useState(false);
+const [listaGastos, setListaGastos] = useState<any[]>([]);
+
+// --- ESTADOS PARA GESTIÓN DE GASTOS Y CAJA ---
+const [misCategorias, setMisCategorias] = useState<any[]>([]);
+const [nuevaCatNombre, setNuevaCatNombre] = useState('');
+const [nuevaCatIcono, setNuevaCatIcono] = useState('💸');
+const [gastoMonto, setGastoMonto] = useState<string>('');
+const [gastoCategoria, setGastoCategoria] = useState('');
+const [gastoDetalle, setGastoDetalle] = useState('');
+
+// --- ESTADOS DE TOTALES DEL DÍA ---
+const [totalIngresosHoy, setTotalIngresosHoy] = useState<number>(0);
+const [totalGastosHoy, setTotalGastosHoy] = useState<number>(0);
+
+// --- ESTADOS PARA DASHBOARD ---
+const [mostrarDashboard, setMostrarDashboard] = useState(false);
+
+
+// --- FUNCIONES DE PROCESAMIENTO PARA GRÁFICOS ---
+const obtenerDatosVentasSemanales = () => {
+    const ventasMap: { [key: string]: number } = {};
+    const hoy = new Date();
     
-    // Estos estados guardarán los números finales de la caja del día
-    const [totalIngresosHoy, setTotalIngresosHoy] = useState<number>(0);
-    const [totalGastosHoy, setTotalGastosHoy] = useState<number>(0);
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(hoy.getDate() - i);
+        const fechaFormateada = d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' });
+        ventasMap[fechaFormateada] = 0;
+    }
 
+    listaVentas.forEach(v => {
+        const fechaV = new Date(v.fecha).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' });
+        if (ventasMap[fechaV] !== undefined) {
+            ventasMap[fechaV] += (Number(v.pedido_total) || 0);
+        }
+    });
+
+    return Object.entries(ventasMap).map(([name, total]) => ({ name, total }));
+};
+
+const obtenerDatosServiciosPopulares = () => {
+    const conteo: { [key: string]: number } = {};
+    listaVentas.forEach(v => {
+        // Verificamos que detalle_precios exista y sea un array
+        if (v.detalle_precios && Array.isArray(v.detalle_precios)) {
+            v.detalle_precios.forEach((item: any) => {
+                // Si item.servicio es null, usamos "S/N" (Sin Nombre)
+                const nombre = item.servicio ? item.servicio.split(' ')[0] : "S/N";
+                conteo[nombre] = (conteo[nombre] || 0) + (Number(item.cantidad) || 0);
+            });
+        }
+    });
+    return Object.entries(conteo)
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 5);
+};
+const COLORS_DASHBOARD = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
+
+// Función para el resumen rápido del dashboard
+const obtenerResumenFinanciero = () => {
+    const ventasTotales = listaVentas.reduce((acc, v) => acc + (Number(v.pedido_total) || 0), 0);
+    const ingresosTotales = listaVentas.reduce((acc, v) => acc + (Number(v.cuenta) || 0), 0);
+    const saldosPendientes = listaVentas.reduce((acc, v) => acc + (Number(v.saldo) || 0), 0);
+    return { ventasTotales, ingresosTotales, saldosPendientes };
+};
 // ==========================================
   // --- FUNCIÓN PARA REFRESCAR TOTALES (NUEVO) ---
   // ==========================================
@@ -104,33 +167,43 @@ const refrescarTotalesHoy = async () => {
   // ==========================================
   // --- CARGAR DATOS AL INICIAR ---
   // ==========================================
+ // ==========================================
+  // --- CARGAR DATOS AL INICIAR (CORREGIDO) ---
+  // ==========================================
   useEffect(() => {
-    async function descargarDatos() {
-      // Cargar Servicios
-      const { data: dataServ } = await supabase
-        .from('Servicios')
-        .select('Nombre')
-        .order('Nombre', { ascending: true });
-      if (dataServ) setListaServicios(dataServ.map(s => s.Nombre));
+    async function descargarDatosIniciales() {
+      try {
+        // 1. Cargar Servicios
+        const { data: dataServ } = await supabase
+          .from('Servicios')
+          .select('Nombre')
+          .order('Nombre', { ascending: true });
+        if (dataServ) setListaServicios(dataServ.map(s => s.Nombre));
 
-      // Cargar Clientes
-      const { data: dataClie } = await supabase
-        .from('Clientes')
-        .select('*')
-        .order('Nombre', { ascending: true });
-      if (dataClie) setListaClientes(dataClie);
+        // 2. Cargar Clientes
+        const { data: dataClie } = await supabase
+          .from('Clientes')
+          .select('*')
+          .order('Nombre', { ascending: true });
+        if (dataClie) setListaClientes(dataClie);
 
-      // Cargar Categorías de Gastos
-      const { data: dataCats } = await supabase
-        .from('categorias_gastos')
-        .select('*')
-        .order('nombre', { ascending: true });
-      if (dataCats) setMisCategorias(dataCats);
+        // 3. Cargar Categorías de Gastos
+        const { data: dataCats } = await supabase
+          .from('categorias_gastos')
+          .select('*')
+          .order('nombre', { ascending: true });
+        if (dataCats) setMisCategorias(dataCats);
 
-      // CARGAR TOTALES DEL DÍA AL EMPEZAR
-      refrescarTotalesHoy();
+        // 4. Cargar Totales y Ventas del mes (Para que el Dashboard funcione)
+        await refrescarTotalesHoy();
+        await cargarDatosVentas();
+        
+      } catch (error) {
+        console.error("Error en la carga inicial:", error);
+      }
     }
-    descargarDatos();
+
+    descargarDatosIniciales();
   }, []);
 
   // ==========================================
@@ -200,152 +273,179 @@ const refrescarTotalesHoy = async () => {
       alert("Error al registrar el gasto: " + error.message);
     }
   };
-  // <<< FUNCIÓN PARA CARGAR LAS VENTAS (Indispensable para la pestaña de Entregas) >>>
-  const cargarDatosVentas = async () => {
-    const { data } = await supabase
+ // <<< LÓGICA ACTUALIZADA: VENTAS, GASTOS Y CLIENTES >>>
+
+const cargarDatosVentas = async () => {
+  const unMesAtras = new Date();
+  unMesAtras.setMonth(unMesAtras.getMonth() - 1);
+
+  const { data, error } = await supabase
+    .from('registro_ventas')
+    .select('*')
+    .gte('fecha', unMesAtras.toISOString()) 
+    .order('fecha', { ascending: false });
+
+  if (data) setListaVentas(data);
+  if (error) console.error("Error cargando histórico de ventas:", error);
+};
+
+const cargarHistorialGastos = async () => {
+  // Traemos TODOS los gastos para asegurar que se vean
+  const { data, error } = await supabase
+    .from('gastos')
+    .select('*')
+    .order('fecha', { ascending: false });
+
+  if (error) {
+    console.error("Error en Supabase:", error.message);
+    return;
+  }
+
+  if (data) {
+    console.log("Gastos detectados en BD:", data.length); // Mira esto en la consola (F12)
+    const datosLimpios = data.map(g => ({
+      ...g,
+      monto: Number(g.monto) || 0,
+      // Extraemos mes y año para agrupar después
+      mes: new Date(g.fecha).getMonth() + 1,
+      anio: new Date(g.fecha).getFullYear()
+    }));
+    setListaGastos(datosLimpios);
+  }
+};
+// ==========================================
+// --- FUNCIONES DE CLIENTES ---
+// ==========================================
+const guardarClienteBD = async () => {
+  if (nombreClienteInput.trim() === "") return alert("El nombre es obligatorio");
+  const { data, error } = await supabase
+    .from('Clientes')
+    .insert([{ 
+      Nombre: nombreClienteInput.toUpperCase(), 
+      Telefono: telClienteInput,
+      Tipo: tipoClienteInput 
+    }])
+    .select();
+
+  if (!error) {
+    setListaClientes([...listaClientes, data[0]]);
+    setNombreClienteInput('');
+    setTelClienteInput('');
+    setTipoClienteInput('Regular');
+  } else {
+    alert("Error: " + error.message);
+  }
+};
+
+const eliminarCliente = async (id: number, nombre: string) => {
+  if (confirm(`¿Eliminar a ${nombre}?`)) {
+    const { error } = await supabase.from('Clientes').delete().eq('id', id);
+    if (!error) setListaClientes(listaClientes.filter(c => c.id !== id));
+  }
+};
+
+// ==========================================
+// --- FINALIZAR PEDIDO (CON REFRESCO TOTAL) ---
+// ==========================================
+const finalizarPedido = async () => {
+  if (trabajos.length === 0) return alert("Debes agregar al menos un trabajo");
+  if (!nombreClienteInput) return alert("El nombre del cliente es obligatorio");
+
+  try {
+    const idPedidoActual = Date.now(); 
+    const totalNuevoTrabajo = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
+    
+    const desglosePreciosNuevos = trabajos.map(t => ({
+      servicio: t.servicio.toUpperCase().trim(),
+      cantidad: Number(t.cant),
+      subtotal: Number(t.precio) 
+    }));
+
+    const resumenDetalleNuevo = trabajos.map(t => 
+      `${t.cant} ${t.servicio.toUpperCase()} (${t.ancho}x${t.alto})`
+    ).join(" // ");
+
+    // PASO A: INSERTAR EN TALLER
+    const filasParaTaller = trabajos.map(t => ({
+      id_pedido: idPedidoActual,
+      nombre_cliente: nombreClienteInput.toUpperCase().trim(),
+      servicio: t.servicio,
+      ancho: t.ancho,
+      alto: t.alto,
+      cantidad: Number(t.cant),
+      detalle: t.detalle || '',
+      estado: 'Pendiente'
+    }));
+
+    const { error: errorTaller } = await supabase.from('pedidos_activos').insert(filasParaTaller);
+    if (errorTaller) throw errorTaller;
+
+    // PASO B: ACTUALIZAR O CREAR EN CAJA
+    const { data: pedidoExistente } = await supabase
       .from('registro_ventas')
       .select('*')
-      .eq('estado', 'Pendiente'); 
-    if (data) setListaVentas(data);
-  };
+      .eq('nombre_cliente', nombreClienteInput.toUpperCase().trim())
+      .eq('estado', 'Pendiente')
+      .maybeSingle();
 
-  // ==========================================
-  // --- FUNCIONES DE CLIENTES ---
-  // ==========================================
-  const guardarClienteBD = async () => {
-    if (nombreClienteInput.trim() === "") return alert("El nombre es obligatorio");
-    const { data, error } = await supabase
-      .from('Clientes')
-      .insert([{ 
-        Nombre: nombreClienteInput.toUpperCase(), 
-        Telefono: telClienteInput,
-        Tipo: tipoClienteInput 
-      }])
-      .select();
+    if (pedidoExistente) {
+      const preciosPrevios = Array.isArray(pedidoExistente.detalle_precios) ? pedidoExistente.detalle_precios : [];
+      const nuevoDesgloseTotal = [...preciosPrevios, ...desglosePreciosNuevos];
+      const nuevoTotalGlobal = Number(pedidoExistente.pedido_total) + totalNuevoTrabajo;
+      const nuevaCuentaGlobal = Number(pedidoExistente.cuenta) + Number(montoAcuenta);
+      const nuevoSaldoGlobal = Math.max(0, nuevoTotalGlobal - nuevaCuentaGlobal);
 
-    if (!error) {
-      setListaClientes([...listaClientes, data[0]]);
-      setNombreClienteInput('');
-      setTelClienteInput('');
-      setTipoClienteInput('Regular');
-    } else {
-      alert("Error: " + error.message);
-    }
-  };
-
-  const eliminarCliente = async (id: number, nombre: string) => {
-    if (confirm(`¿Eliminar a ${nombre}?`)) {
-      const { error } = await supabase.from('Clientes').delete().eq('id', id);
-      if (!error) setListaClientes(listaClientes.filter(c => c.id !== id));
-    }
-  };
-
- const finalizarPedido = async () => {
-    // 1. Validaciones básicas
-    if (trabajos.length === 0) return alert("Debes agregar al menos un trabajo");
-    if (!nombreClienteInput) return alert("El nombre del cliente es obligatorio");
-
-    try {
-      const idPedidoActual = Date.now(); 
-      // Total de lo que se está agregando en este momento
-      const totalNuevoTrabajo = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
-      
-      // --- CREAR EL DESGLOSE INTELIGENTE (JSON) ---
-      const desglosePreciosNuevos = trabajos.map(t => ({
-        servicio: t.servicio.toUpperCase().trim(),
-        cantidad: Number(t.cant),
-        subtotal: Number(t.precio) 
-      }));
-
-      const resumenDetalleNuevo = trabajos.map(t => 
-        `${t.cant} ${t.servicio.toUpperCase()} (${t.ancho}x${t.alto})`
-      ).join(" // ");
-
-      // --- PASO A: INSERTAR EN 'pedidos_activos' (TALLER) ---
-      const filasParaTaller = trabajos.map(t => ({
-        id_pedido: idPedidoActual,
-        nombre_cliente: nombreClienteInput.toUpperCase().trim(),
-        servicio: t.servicio,
-        ancho: t.ancho,
-        alto: t.alto,
-        cantidad: Number(t.cant),
-        detalle: t.detalle || '',
-        estado: 'Pendiente'
-      }));
-
-      const { error: errorTaller } = await supabase.from('pedidos_activos').insert(filasParaTaller);
-      if (errorTaller) throw errorTaller;
-
-      // --- PASO B: ACTUALIZAR O CREAR EN 'registro_ventas' (CAJA) ---
-      const { data: pedidoExistente } = await supabase
+      const { error: errorUpdate } = await supabase
         .from('registro_ventas')
-        .select('*')
-        .eq('nombre_cliente', nombreClienteInput.toUpperCase().trim())
-        .eq('estado', 'Pendiente')
-        .maybeSingle();
-
-      if (pedidoExistente) {
-        // 1. PREPARAR VALORES (Sumar lo viejo + lo nuevo)
-        const preciosPrevios = Array.isArray(pedidoExistente.detalle_precios) ? pedidoExistente.detalle_precios : [];
-        const nuevoDesgloseTotal = [...preciosPrevios, ...desglosePreciosNuevos];
+        .update({
+          detalle_servicio: pedidoExistente.detalle_servicio + " // " + resumenDetalleNuevo,
+          detalle_precios: nuevoDesgloseTotal, 
+          pedido_total: nuevoTotalGlobal,
+          cuenta: nuevaCuentaGlobal,
+          saldo: nuevoSaldoGlobal
+        })
+        .eq('id_pedido', pedidoExistente.id_pedido);
         
-        const nuevoTotalGlobal = Number(pedidoExistente.pedido_total) + totalNuevoTrabajo;
-        const nuevaCuentaGlobal = Number(pedidoExistente.cuenta) + Number(montoAcuenta);
-        
-        // CORRECCIÓN: Resta numérica segura
-        const nuevoSaldoGlobal = Number(nuevoTotalGlobal) - Number(nuevaCuentaGlobal);
+      if (errorUpdate) throw errorUpdate;
+    } else {
+      const totalVenta = totalNuevoTrabajo;
+      const cuentaVenta = Number(montoAcuenta);
+      const saldoVenta = totalVenta - cuentaVenta;
 
-        // 2. ACTUALIZAR
-        const { error: errorUpdate } = await supabase
-          .from('registro_ventas')
-          .update({
-            detalle_servicio: pedidoExistente.detalle_servicio + " // " + resumenDetalleNuevo,
-            detalle_precios: nuevoDesgloseTotal, 
-            pedido_total: nuevoTotalGlobal,
-            cuenta: nuevaCuentaGlobal,
-            saldo: nuevoSaldoGlobal
-          })
-          .eq('id_pedido', pedidoExistente.id_pedido);
-          
-        if (errorUpdate) throw errorUpdate;
-      } else {
-        // SI ES CLIENTE NUEVO (O nota nueva)
-        const totalVenta = totalNuevoTrabajo;
-        const cuentaVenta = Number(montoAcuenta);
-        const saldoVenta = Number(totalVenta) - Number(cuentaVenta);
-
-        const { error: errorVenta } = await supabase
-          .from('registro_ventas')
-          .insert([{
-            id_pedido: idPedidoActual,
-            nombre_cliente: nombreClienteInput.toUpperCase().trim(),
-            telefono_cliente: telClienteInput,
-            detalle_servicio: resumenDetalleNuevo,
-            detalle_precios: desglosePreciosNuevos, 
-            pedido_total: totalVenta,
-            cuenta: cuentaVenta,
-            saldo: saldoVenta,
-            estado: 'Pendiente'
-          }]);
-        if (errorVenta) throw errorVenta;
-      }
-
-      // Actualizar totales de caja y limpiar
-      await refrescarTotalesHoy();
-      alert("¡Pedido guardado correctamente! 🚀");
-      
-      setTrabajos([]);
-      setNombreClienteInput('');
-      setTelClienteInput('');
-      setMontoAcuenta(0);
-      setAccionInicio('menu');
-      cargarDatosVentas();
-
-    } catch (err: any) {
-      console.error("Error al guardar:", err);
-      alert("Hubo un problema: " + err.message);
+      const { error: errorVenta } = await supabase
+        .from('registro_ventas')
+        .insert([{
+          id_pedido: idPedidoActual,
+          nombre_cliente: nombreClienteInput.toUpperCase().trim(),
+          telefono_cliente: telClienteInput,
+          detalle_servicio: resumenDetalleNuevo,
+          detalle_precios: desglosePreciosNuevos, 
+          pedido_total: totalVenta,
+          cuenta: cuentaVenta,
+          saldo: saldoVenta,
+          estado: 'Pendiente'
+        }]);
+      if (errorVenta) throw errorVenta;
     }
-  }; // <--- AQUÍ CIERRA LA FUNCIÓN CORRECTAMENTE
+
+    // --- ACTUALIZACIÓN MASIVA DE DATOS ---
+    await refrescarTotalesHoy(); // Actualiza círculos de arriba
+    await cargarDatosVentas();   // Actualiza lista de ventas del Dashboard
+    await cargarHistorialGastos(); // Asegura que los gastos no se pierdan al refrescar
+    
+    alert("¡Pedido guardado correctamente! 🚀");
+    
+    setTrabajos([]);
+    setNombreClienteInput('');
+    setTelClienteInput('');
+    setMontoAcuenta(0);
+    setAccionInicio('menu');
+
+  } catch (err: any) {
+    console.error("Error al guardar:", err);
+    alert("Hubo un problema: " + err.message);
+  }
+}; // <--- AQUÍ CIERRA LA FUNCIÓN CORRECTAMENTE
 
   // ==========================================
   // --- CONTROL DE TALLER ---
@@ -365,26 +465,66 @@ const refrescarTotalesHoy = async () => {
       .eq('id', id);
     if (!error) cargarPedidosTaller(); 
   };
-
-  // <<< FUNCIÓN PARA FINALIZAR ENTREGA (Limpia ambas tablas) >>>
-  const entregarPedidoFinal = async (nombreCliente: string) => {
-    try {
-      // 1. Marcar venta como Entregado
-      await supabase.from('registro_ventas').update({ estado: 'Entregado' })
-        .eq('nombre_cliente', nombreCliente).eq('estado', 'Pendiente');
-      
-      // 2. Archivar trabajos en taller
-      await supabase.from('pedidos_activos').update({ estado: 'Archivado' })
-        .eq('nombre_cliente', nombreCliente).eq('estado', 'Finalizado');
-
-      alert(`✅ Paquete de ${nombreCliente} entregado.`);
-      cargarPedidosTaller();
-      cargarDatosVentas();
-    } catch (err) { 
-      alert("Error en la entrega"); 
+const entregarPedidoFinalv2 = async (nombreCliente: string) => {
+  try {
+    const nombreLimpio = nombreCliente.trim();
+    
+    // 1. Buscamos la venta activa de este cliente
+    const ventaActual = listaVentas.find(v => v.nombre_cliente?.trim() === nombreLimpio && v.estado === 'Pendiente');
+    
+    if (!ventaActual) {
+      alert("No se encontró deuda pendiente para: " + nombreLimpio);
+      return;
     }
-  };
 
+    // 2. Preguntar cuánto paga hoy
+    const saldoActual = Number(ventaActual.saldo) || 0;
+    const montoIngresado = window.prompt(
+      `CLIENTE: ${nombreLimpio}\nSALDO PENDIENTE: ${saldoActual} Bs.\n\n¿Cuánto está pagando/abonando ahora?`, 
+      saldoActual.toString()
+    );
+
+    if (montoIngresado === null) return; // Si cancela el prompt
+
+    const pagoHoy = parseFloat(montoIngresado) || 0;
+    const nuevoSaldo = Math.max(0, saldoActual - pagoHoy);
+    const nuevaCuenta = (Number(ventaActual.cuenta) || 0) + pagoHoy;
+
+    // 3. ACTUALIZAR CAJA (registro_ventas)
+    const { error: errVenta } = await supabase
+      .from('registro_ventas')
+      .update({ 
+        cuenta: nuevaCuenta, 
+        saldo: nuevoSaldo,
+        estado: nuevoSaldo === 0 ? 'Entregado' : 'Pendiente' 
+      })
+      .eq('id_pedido', ventaActual.id_pedido);
+
+    if (errVenta) throw errVenta;
+
+    // 4. ARCHIVAR EN TALLER (Solo los IDs marcados en los checkboxes)
+    if (pedidosSeleccionados.length > 0) {
+      const { error: errTaller } = await supabase
+        .from('pedidos_activos')
+        .update({ estado: 'Archivado' })
+        .in('id', pedidosSeleccionados); // Filtra por la lista de seleccionados
+
+      if (errTaller) throw errTaller;
+    }
+
+    alert(`✅ Cobro registrado: ${pagoHoy} Bs.\nSaldo restante: ${nuevoSaldo} Bs.`);
+    
+    // 5. Limpiar y refrescar
+    setPedidosSeleccionados([]);
+    await cargarDatosVentas();
+    await cargarPedidosTaller();
+    await refrescarTotalesHoy();
+
+  } catch (err: any) { 
+    console.error(err);
+    alert("Error: " + err.message); 
+  }
+};
   // ==========================================
   // --- SUBIDA A CLOUDINARY ---
   // ==========================================
@@ -437,12 +577,15 @@ const refrescarTotalesHoy = async () => {
   };
 
   // <<< EFECTO DE CARGA SEGÚN PESTAÑA >>>
-  useEffect(() => {
-    if (pestaña === 'pedidos' || pestaña === 'taller' || pestaña === 'reportes') {
-      cargarPedidosTaller();
-      cargarDatosVentas();
-    }
-  }, [pestaña]);
+ useEffect(() => {
+  // CADA VEZ que cambies de pestaña, reseteamos la selección para evitar errores
+  setPedidosSeleccionados([]); 
+
+  if (pestaña === 'pedidos' || pestaña === 'taller' || pestaña === 'reportes') {
+    cargarPedidosTaller();
+    cargarDatosVentas();
+  }
+}, [pestaña]);
 
   // --- FUNCIONES DE SERVICIOS ---
   const eliminarServicio = async (nombreEliminar: string) => {
@@ -513,10 +656,17 @@ const refrescarTotalesHoy = async () => {
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                  <button className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
-                    <span className="text-4xl">💰</span>
-                    <span className="font-bold text-sm">Cobrar Venta</span>
-                  </button>
+                        {/* BOTÓN TRANSFORMADO: De Cobrar Venta a Análisis */}
+                        <button 
+                          onClick={() => {
+                            cargarDatosVentas(); // Carga los datos de Supabase antes de abrir
+                            setMostrarDashboard(true); // Activa el modal del Dashboard
+                          }} 
+                          className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all group"
+                        >
+                          <span className="text-4xl group-hover:scale-110 transition-transform">📊</span>
+                          <span className="font-bold text-sm text-slate-700">Análisis</span>
+                        </button>   
                   
                   <button onClick={() => setAccionInicio('nuevo-gasto')} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
                     <span className="text-4xl">💸</span>
@@ -1111,114 +1261,114 @@ const refrescarTotalesHoy = async () => {
     </div>
   </section>
 )}
-{/* ========================================== */}
-{/* --- PESTAÑA TALLER (ENFOQUE VISUAL) --- */}
-{/* ========================================== */}
-{pestaña === 'taller' && (
-  <section className="animate-in fade-in duration-500 p-4 pb-32 bg-slate-900 min-h-screen">
-    <div className="mb-6 flex justify-between items-center">
-      <h2 className="text-xl font-black text-white uppercase tracking-tighter">Panel de Impresión</h2>
-      <button onClick={cargarPedidosTaller} className="bg-slate-800 text-slate-400 p-2 rounded-xl">🔄</button>
-    </div>
-
-    {/* Filtros Rápidos */}
-    <div className="grid grid-cols-2 gap-2 mb-6">
-      <div className="bg-slate-800 p-3 rounded-2xl border border-slate-700">
-        <p className="text-[10px] font-bold text-slate-500 uppercase">Pendientes</p>
-        <p className="text-xl font-black text-white">{listaPedidosTaller.filter(p => p.estado === 'Para Imprimir').length}</p>
-      </div>
-      <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-900/20">
-        <p className="text-[10px] font-bold text-blue-200 uppercase">En Máquina</p>
-        <p className="text-xl font-black text-white">{listaPedidosTaller.filter(p => p.estado === 'Imprimiendo').length}</p>
-      </div>
-    </div>
-
-    <div className="grid grid-cols-1 gap-4">
-      {listaPedidosTaller
-        .filter(p => p.estado === 'Para Imprimir' || p.estado === 'Imprimiendo')
-        .map((trabajo) => (
-          <div key={trabajo.id} className={`relative overflow-hidden rounded-[32px] border-2 transition-all ${trabajo.estado === 'Imprimiendo' ? 'border-blue-500 bg-slate-800' : 'border-slate-800 bg-slate-800/50'}`}>
-            
-            {/* Imagen de Fondo o Preview */}
-            <div className="h-48 bg-slate-700 relative">
-              {trabajo.url_foto ? (
-                <img 
-                  src={trabajo.url_foto} 
-                  className="w-full h-full object-cover opacity-60" 
-                  onClick={() => window.open(trabajo.url_foto, '_blank')}
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-slate-500 italic text-xs uppercase font-bold">Sin Captura</div>
-              )}
-              
-              {/* Badge de Medida Flotante */}
-              <div className="absolute top-4 left-4 bg-white px-3 py-1.5 rounded-full shadow-xl">
-                <p className="text-[12px] font-black text-slate-900 italic">{trabajo.ancho} x {trabajo.alto} m</p>
-              </div>
-            </div>
-
-            {/* Datos del Trabajo */}
-            <div className="p-5">
-              <div className="flex justify-between items-start mb-3">
-                <div className="max-w-[70%]">
-                  <p className="text-blue-400 text-[10px] font-black uppercase tracking-widest">{trabajo.servicio}</p>
-                  <h3 className="text-white font-bold text-lg leading-tight truncate">{trabajo.nombre_cliente}</h3>
-                  <p className="text-slate-400 text-xs mt-1 font-medium">{trabajo.detalle || 'Sin observaciones'}</p>
-                </div>
-                <div className="bg-slate-900 px-3 py-2 rounded-2xl border border-slate-700 text-center">
-                  <p className="text-[9px] font-bold text-slate-500 uppercase">Cant.</p>
-                  <p className="text-lg font-black text-white">x{trabajo.cantidad}</p>
-                </div>
-              </div>
-
-           {/* Botones de Estado para el Trabajador */}
-<div className="flex gap-2 mt-4">
-  {trabajo.estado === 'Para Imprimir' ? (
-    <button 
-      onClick={() => cambiarEstadoPedido(trabajo.id, 'Imprimiendo')}
-      className="flex-1 h-14 bg-blue-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-lg shadow-blue-900/40 active:scale-95 transition-all"
-    >
-      ⏺ Iniciar Impresión
-    </button>
-  ) : (
-    <button 
-      onClick={() => { 
-        if(confirm(`¿Confirmas que la impresión de "${trabajo.nombre_cliente}" está lista?`)) { 
-          cambiarEstadoPedido(trabajo.id, 'Finalizado') 
-        } 
-      }}
-      className="flex-1 h-14 bg-emerald-500 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-lg shadow-emerald-900/40 active:scale-95 transition-all flex flex-col items-center justify-center leading-none"
-    >
-      <span className="text-[9px] opacity-70 mb-1">EN MÁQUINA...</span>
-      <span>✅ Terminar Trabajo</span>
-    </button>
-  )}
-  
-  {/* Botón para ver foto completa */}
-  {trabajo.url_foto && (
-    <button 
-      onClick={() => window.open(trabajo.url_foto, '_blank')}
-      className="w-14 h-14 bg-slate-700 text-white rounded-2xl flex items-center justify-center text-xl hover:bg-slate-600 transition-colors"
-    >
-      🖼️
-    </button>
-  )}
-</div>
-            </div>
-          </div>
-        ))}
-
-      {/* Mensaje si no hay nada para imprimir */}
-      {listaPedidosTaller.filter(p => p.estado === 'Para Imprimir' || p.estado === 'Imprimiendo').length === 0 && (
-        <div className="py-20 text-center">
-          <p className="text-slate-600 font-black uppercase tracking-[4px] text-sm">Todo al día</p>
-          <p className="text-slate-800 text-4xl mt-2 italic">☕</p>
+    {/* ========================================== */}
+    {/* --- PESTAÑA TALLER (ENFOQUE VISUAL) --- */}
+    {/* ========================================== */}
+      {pestaña === 'taller' && (
+      <section className="animate-in fade-in duration-500 p-4 pb-32 bg-slate-900 min-h-screen">
+        <div className="mb-6 flex justify-between items-center">
+          <h2 className="text-xl font-black text-white uppercase tracking-tighter">Panel de Impresión</h2>
+          <button onClick={cargarPedidosTaller} className="bg-slate-800 text-slate-400 p-2 rounded-xl">🔄</button>
         </div>
+
+        {/* Filtros Rápidos */}
+        <div className="grid grid-cols-2 gap-2 mb-6">
+          <div className="bg-slate-800 p-3 rounded-2xl border border-slate-700">
+            <p className="text-[10px] font-bold text-slate-500 uppercase">Pendientes</p>
+            <p className="text-xl font-black text-white">{listaPedidosTaller.filter(p => p.estado === 'Para Imprimir').length}</p>
+          </div>
+          <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-900/20">
+            <p className="text-[10px] font-bold text-blue-200 uppercase">En Máquina</p>
+            <p className="text-xl font-black text-white">{listaPedidosTaller.filter(p => p.estado === 'Imprimiendo').length}</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4">
+          {listaPedidosTaller
+            .filter(p => p.estado === 'Para Imprimir' || p.estado === 'Imprimiendo')
+            .map((trabajo) => (
+              <div key={trabajo.id} className={`relative overflow-hidden rounded-[32px] border-2 transition-all ${trabajo.estado === 'Imprimiendo' ? 'border-blue-500 bg-slate-800' : 'border-slate-800 bg-slate-800/50'}`}>
+                
+                {/* Imagen de Fondo o Preview */}
+                <div className="h-48 bg-slate-700 relative">
+                  {trabajo.url_foto ? (
+                    <img 
+                      src={trabajo.url_foto} 
+                      className="w-full h-full object-cover opacity-60" 
+                      onClick={() => window.open(trabajo.url_foto, '_blank')}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-slate-500 italic text-xs uppercase font-bold">Sin Captura</div>
+                  )}
+                  
+                  {/* Badge de Medida Flotante */}
+                  <div className="absolute top-4 left-4 bg-white px-3 py-1.5 rounded-full shadow-xl">
+                    <p className="text-[12px] font-black text-slate-900 italic">{trabajo.ancho} x {trabajo.alto} m</p>
+                  </div>
+                </div>
+
+                {/* Datos del Trabajo */}
+                <div className="p-5">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="max-w-[70%]">
+                      <p className="text-blue-400 text-[10px] font-black uppercase tracking-widest">{trabajo.servicio}</p>
+                      <h3 className="text-white font-bold text-lg leading-tight truncate">{trabajo.nombre_cliente}</h3>
+                      <p className="text-slate-400 text-xs mt-1 font-medium">{trabajo.detalle || 'Sin observaciones'}</p>
+                    </div>
+                    <div className="bg-slate-900 px-3 py-2 rounded-2xl border border-slate-700 text-center">
+                      <p className="text-[9px] font-bold text-slate-500 uppercase">Cant.</p>
+                      <p className="text-lg font-black text-white">x{trabajo.cantidad}</p>
+                    </div>
+                  </div>
+
+              {/* Botones de Estado para el Trabajador */}
+    <div className="flex gap-2 mt-4">
+      {trabajo.estado === 'Para Imprimir' ? (
+        <button 
+          onClick={() => cambiarEstadoPedido(trabajo.id, 'Imprimiendo')}
+          className="flex-1 h-14 bg-blue-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-lg shadow-blue-900/40 active:scale-95 transition-all"
+        >
+          ⏺ Iniciar Impresión
+        </button>
+      ) : (
+        <button 
+          onClick={() => { 
+            if(confirm(`¿Confirmas que la impresión de "${trabajo.nombre_cliente}" está lista?`)) { 
+              cambiarEstadoPedido(trabajo.id, 'Finalizado') 
+            } 
+          }}
+          className="flex-1 h-14 bg-emerald-500 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-lg shadow-emerald-900/40 active:scale-95 transition-all flex flex-col items-center justify-center leading-none"
+        >
+          <span className="text-[9px] opacity-70 mb-1">EN MÁQUINA...</span>
+          <span>✅ Terminar Trabajo</span>
+        </button>
+      )}
+      
+      {/* Botón para ver foto completa */}
+      {trabajo.url_foto && (
+        <button 
+          onClick={() => window.open(trabajo.url_foto, '_blank')}
+          className="w-14 h-14 bg-slate-700 text-white rounded-2xl flex items-center justify-center text-xl hover:bg-slate-600 transition-colors"
+        >
+          🖼️
+        </button>
       )}
     </div>
-  </section>
-)}
-{/* ========================================== */}
+                </div>
+              </div>
+            ))}
+
+          {/* Mensaje si no hay nada para imprimir */}
+          {listaPedidosTaller.filter(p => p.estado === 'Para Imprimir' || p.estado === 'Imprimiendo').length === 0 && (
+            <div className="py-20 text-center">
+              <p className="text-slate-600 font-black uppercase tracking-[4px] text-sm">Todo al día</p>
+              <p className="text-slate-800 text-4xl mt-2 italic">☕</p>
+            </div>
+          )}
+        </div>
+      </section>
+    )}
+    {/* ========================================== */}
 {/* --- PESTAÑA DESPACHO (ENTREGAS Y COBROS) --- */}
 {/* ========================================== */}
 {pestaña === 'reportes' && (
@@ -1237,17 +1387,13 @@ const refrescarTotalesHoy = async () => {
           .filter(p => p.estado === 'Finalizado')
           .reduce((acc: any, pedido: any) => {
             if (!acc[pedido.nombre_cliente]) {
-              // BUSQUEDA CORRECTA: Usamos el nombre del cliente para cruzar con registro_ventas
               const ventaOriginal = listaVentas.find(v => v.nombre_cliente === pedido.nombre_cliente);
-              
               acc[pedido.nombre_cliente] = { 
                 nombre: pedido.nombre_cliente,
-                trabajosTaller: [], // Estos son los físicos que están en taller
-                // DATOS FINANCIEROS REALES (Vienen de la tabla ventas)
+                trabajosTaller: [], 
                 totalVenta: ventaOriginal?.pedido_total || 0,
                 adelanto: ventaOriginal?.cuenta || 0,
                 saldo: ventaOriginal?.saldo || 0,
-                // DESGLOSE PARA EXCEL/DETALLE (Viene de nuestro nuevo JSONB)
                 desglosePrecios: ventaOriginal?.detalle_precios || []
               };
             }
@@ -1255,12 +1401,16 @@ const refrescarTotalesHoy = async () => {
             return acc;
           }, {})
       ).map((grupo: any, idx: number) => {
-        // El saldo ya viene calculado desde la DB, pero lo aseguramos
         const saldoPendiente = grupo.saldo;
         const estaPagado = saldoPendiente <= 0;
 
+        // Contamos cuántos de este grupo específico están seleccionados
+        const idsDelGrupo = grupo.trabajosTaller.map((t: any) => t.id);
+        const seleccionadosDeEsteGrupo = pedidosSeleccionados.filter(id => idsDelGrupo.includes(id)).length;
+
         return (
-          <div key={idx} className="bg-white rounded-[35px] shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
+          <div key={idx} className="bg-white rounded-[35px] shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden mb-6">
+            
             {/* CABECERA: CLIENTE Y FOTOS */}
             <div className="p-5 bg-white">
               <div className="flex justify-between items-start mb-4">
@@ -1276,15 +1426,11 @@ const refrescarTotalesHoy = async () => {
               {/* TIRA DE IMÁGENES */}
               <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                 {grupo.trabajosTaller.map((t: any) => (
-                  <div key={t.id} className="relative flex-shrink-0 w-20 h-20 rounded-2xl border border-slate-200 overflow-hidden bg-slate-50">
+                  <div key={t.id} className={`relative flex-shrink-0 w-20 h-20 rounded-2xl border-2 overflow-hidden transition-all ${pedidosSeleccionados.includes(t.id) ? 'border-blue-600 scale-95' : 'border-slate-200 opacity-60'}`}>
                     {t.url_foto ? (
-                      <img 
-                        src={t.url_foto} 
-                        className="w-full h-full object-cover" 
-                        onClick={() => window.open(t.url_foto, '_blank')} 
-                      />
+                      <img src={t.url_foto} className="w-full h-full object-cover" />
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center text-[20px]">🖼️</div>
+                      <div className="w-full h-full flex items-center justify-center text-[20px] bg-slate-50">🖼️</div>
                     )}
                     <div className="absolute bottom-0 right-0 bg-black/60 text-white text-[8px] px-1 font-bold">
                       {t.ancho}x{t.alto}
@@ -1294,18 +1440,57 @@ const refrescarTotalesHoy = async () => {
               </div>
             </div>
 
-            {/* DETALLE DE PRECIOS (Extraído del JSONB guardado en Ventas) */}
-            <div className="px-5 py-3 bg-slate-50 space-y-2 border-t border-slate-100">
-              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Costo Detallado:</p>
-              {grupo.desglosePrecios.map((item: any, i: number) => (
-                <div key={i} className="flex justify-between items-center text-[11px]">
-                  <span className="text-slate-500 font-bold uppercase truncate max-w-[180px]">
-                    {item.servicio} (x{item.cantidad})
-                  </span>
-                  <span className="font-black text-slate-700">{item.subtotal} Bs.</span>
-                </div>
-              ))}
-            </div>
+            {/* --- SECCIÓN COSTO DETALLADO CON PRECIOS REALES --- */}
+<div className="px-4 py-3 bg-slate-50 space-y-2 border-t border-slate-100">
+  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Items en este paquete:</p>
+  
+  {grupo.trabajosTaller.map((trabajo: any) => {
+    const isSelected = pedidosSeleccionados.includes(trabajo.id);
+    
+    // BUSCAMOS EL PRECIO: 
+    // Si 'trabajo.precio_total' es 0, buscamos en el desglose de la venta por nombre de servicio
+    const precioReferencia = trabajo.precio_total > 0 
+      ? trabajo.precio_total 
+      : grupo.desglosePrecios.find((d: any) => d.servicio === trabajo.servicio)?.subtotal || 0;
+
+    return (
+      <div 
+        key={trabajo.id} 
+        onClick={() => {
+          if (isSelected) setPedidosSeleccionados(prev => prev.filter(id => id !== trabajo.id));
+          else setPedidosSeleccionados(prev => [...prev, trabajo.id]);
+        }}
+        className={`flex items-center justify-between p-3 rounded-2xl border transition-all cursor-pointer ${
+          isSelected ? 'bg-white border-blue-500 shadow-sm scale-[1.02]' : 'bg-transparent border-slate-200 opacity-70'
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          {/* EL CHECKBOX VISIBLE */}
+          <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${
+            isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-slate-300'
+          }`}>
+            {isSelected && <span className="text-white text-[10px] font-bold">✓</span>}
+          </div>
+          
+          <div>
+            <span className={`text-[11px] font-black uppercase block ${isSelected ? 'text-blue-600' : 'text-slate-600'}`}>
+              {trabajo.servicio}
+            </span>
+            <span className="text-[9px] text-slate-400 font-bold uppercase">
+              {trabajo.ancho}x{trabajo.alto}m • Cant: {trabajo.cantidad}
+            </span>
+          </div>
+        </div>
+
+        <div className="text-right">
+          <span className={`font-black text-[12px] ${isSelected ? 'text-slate-900' : 'text-slate-400'}`}>
+            {precioReferencia} Bs.
+          </span>
+        </div>
+      </div>
+    );
+  })}
+</div>
 
             {/* RESUMEN FINANCIERO */}
             <div className="p-5 bg-white border-t border-slate-50">
@@ -1314,7 +1499,7 @@ const refrescarTotalesHoy = async () => {
                   <p className="text-[8px] font-bold text-slate-400 uppercase">Total</p>
                   <p className="text-xs font-black text-slate-800">{grupo.totalVenta} Bs.</p>
                 </div>
-                <div className="bg-blue-50 p-2 rounded-2xl border border-blue-100">
+                <div className="bg-blue-50 p-2 rounded-2xl">
                   <p className="text-[8px] font-bold text-blue-400 uppercase">Adelanto</p>
                   <p className="text-xs font-black text-blue-600">{grupo.adelanto} Bs.</p>
                 </div>
@@ -1326,23 +1511,30 @@ const refrescarTotalesHoy = async () => {
                 </div>
               </div>
 
-              {/* ACCIÓN FINAL */}
+              {/* ACCIÓN FINAL DINÁMICA */}
               <button 
-                onClick={() => entregarPedidoFinal(grupo.nombre)}
+                disabled={seleccionadosDeEsteGrupo === 0}
+                onClick={() => entregarPedidoFinalv2(grupo.nombre)}
                 className={`w-full h-14 rounded-[22px] font-black text-[11px] uppercase tracking-widest transition-all ${
-                  estaPagado 
-                  ? 'bg-slate-900 text-white shadow-lg shadow-slate-200' 
-                  : 'bg-red-600 text-white shadow-lg shadow-red-200 animate-pulse'
+                  seleccionadosDeEsteGrupo === 0
+                  ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                  : estaPagado 
+                    ? 'bg-slate-900 text-white shadow-lg' 
+                    : 'bg-red-600 text-white shadow-lg animate-pulse'
                 }`}
               >
-                {estaPagado ? '📦 Entregar ahora' : `💰 Cobrar ${saldoPendiente} Bs. y Entregar`}
+                {seleccionadosDeEsteGrupo === 0 
+                  ? 'Selecciona items arriba' 
+                  : estaPagado 
+                    ? `📦 Entregar ${seleccionadosDeEsteGrupo} Piezas` 
+                    : `💰 Cobrar ${saldoPendiente} Bs y Entregar`}
               </button>
             </div>
           </div>
         );
       })}
 
-      {/* Vacío */}
+      {/* Mensaje de vacío */}
       {listaPedidosTaller.filter(p => p.estado === 'Finalizado').length === 0 && (
         <div className="py-24 text-center">
           <p className="text-slate-300 font-black uppercase tracking-[5px] text-xs">Nada pendiente</p>
@@ -1351,91 +1543,254 @@ const refrescarTotalesHoy = async () => {
     </div>
   </section>
 )}
-  {/* NAVEGACIÓN INFERIOR */}
-    <nav className="fixed bottom-4 left-4 right-4 bg-white/90 backdrop-blur-md border border-gray-200 h-20 rounded-3xl flex justify-around items-center shadow-2xl z-50">
-      <button onClick={() => { setPestaña('inicio'); setAccionInicio('menu'); }} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'inicio' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
-        <span className="text-2xl font-bold italic">🏠</span>
-        <span className="text-[10px] font-black uppercase tracking-tighter">Inicio</span>
-      </button>
-      <button onClick={() => setPestaña('pedidos')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'pedidos' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
-        <span className="text-2xl font-bold italic">📋</span>
-        <span className="text-[10px] font-black uppercase tracking-tighter">Pedidos</span>
-      </button>
-      <button onClick={() => setPestaña('taller')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'taller' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
-        <span className="text-2xl font-bold italic">🖨️</span>
-        <span className="text-[10px] font-black uppercase tracking-tighter">Taller</span>
-      </button>
-      {/* --- ESTE ES EL BOTÓN QUE CAMBIAMOS --- */}
-      <button onClick={() => setPestaña('reportes')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'reportes' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
-        <span className="text-2xl font-bold italic">📦</span>
-        <span className="text-[10px] font-black uppercase tracking-tighter">Entregas</span>
-      </button>
-    </nav>
+      {/* NAVEGACIÓN INFERIOR */}
+        <nav className="fixed bottom-4 left-4 right-4 bg-white/90 backdrop-blur-md border border-gray-200 h-20 rounded-3xl flex justify-around items-center shadow-2xl z-50">
+          <button onClick={() => { setPestaña('inicio'); setAccionInicio('menu'); }} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'inicio' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
+            <span className="text-2xl font-bold italic">🏠</span>
+            <span className="text-[10px] font-black uppercase tracking-tighter">Inicio</span>
+          </button>
+          <button onClick={() => setPestaña('pedidos')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'pedidos' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
+            <span className="text-2xl font-bold italic">📋</span>
+            <span className="text-[10px] font-black uppercase tracking-tighter">Pedidos</span>
+          </button>
+          <button onClick={() => setPestaña('taller')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'taller' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
+            <span className="text-2xl font-bold italic">🖨️</span>
+            <span className="text-[10px] font-black uppercase tracking-tighter">Taller</span>
+          </button>
+          {/* --- ESTE ES EL BOTÓN QUE CAMBIAMOS --- */}
+          <button onClick={() => setPestaña('reportes')} className={`flex flex-col items-center p-3 transition-all ${pestaña === 'reportes' ? 'text-blue-600 scale-110' : 'text-gray-400'}`}>
+            <span className="text-2xl font-bold italic">📦</span>
+            <span className="text-[10px] font-black uppercase tracking-tighter">Entregas</span>
+          </button>
+        </nav>
 
-    {/* --- AQUÍ ESTABA EL ERROR: FALTABA PEGAR ESTO --- */}
-    {modalSubida.abierto && (
-      <div 
-        className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4"
-        onPaste={manejarPegadoEnModal}
-      >
-        <div className="bg-white w-full max-w-md rounded-[32px] p-6 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-          <div className="flex justify-between items-center mb-5">
-            <div>
-              <h3 className="font-black text-slate-800 uppercase tracking-tighter text-xl">Subir Diseño</h3>
-              <p className="text-[10px] text-blue-500 font-bold uppercase tracking-widest">Pedido ID: #{modalSubida.pedidoId}</p>
-            </div>
-            <button 
-              onClick={() => { setModalSubida({abierto: false, pedidoId: null}); setPrevisualizacion(null); setArchivoSeleccionado(null); }} 
-              className="w-10 h-10 flex items-center justify-center bg-slate-100 rounded-full text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors font-bold"
-            >✕</button>
-          </div>
-
-          <div className="border-2 border-dashed border-slate-200 rounded-3xl h-72 flex flex-col items-center justify-center bg-slate-50 overflow-hidden relative">
-            {previsualizacion ? (
-              <img src={previsualizacion} alt="Preview" className="w-full h-full object-contain p-2" />
-            ) : (
-              <div className="text-center p-8">
-                <div className="w-20 h-20 bg-white rounded-3xl shadow-sm flex items-center justify-center mx-auto mb-4 text-4xl">🖼️</div>
-                <p className="text-[12px] font-black text-slate-400 uppercase tracking-[2px] mb-2">
-                  Presiona <span className="text-blue-600 font-bold">CTRL + V</span>
-                </p>
-                <p className="text-[10px] text-slate-300 font-bold uppercase tracking-widest leading-relaxed">Pega la captura aquí o usa el botón de abajo</p>
+        {/* --- AQUÍ ESTABA EL ERROR: FALTABA PEGAR ESTO --- */}
+        {modalSubida.abierto && (
+          <div 
+            className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4"
+            onPaste={manejarPegadoEnModal}
+          >
+            <div className="bg-white w-full max-w-md rounded-[32px] p-6 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+              <div className="flex justify-between items-center mb-5">
+                <div>
+                  <h3 className="font-black text-slate-800 uppercase tracking-tighter text-xl">Subir Diseño</h3>
+                  <p className="text-[10px] text-blue-500 font-bold uppercase tracking-widest">Pedido ID: #{modalSubida.pedidoId}</p>
+                </div>
+                <button 
+                  onClick={() => { setModalSubida({abierto: false, pedidoId: null}); setPrevisualizacion(null); setArchivoSeleccionado(null); }} 
+                  className="w-10 h-10 flex items-center justify-center bg-slate-100 rounded-full text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors font-bold"
+                >✕</button>
               </div>
-            )}
-          </div>
 
-          <div className="mt-6 flex gap-3">
-            <input 
-              type="file" accept="image/*" className="hidden" id="file-upload-modal"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) { 
-                  setArchivoSeleccionado(file); 
-                  setPrevisualizacion(URL.createObjectURL(file)); 
-                }
-              }} 
-            />
-            <button 
-              onClick={() => document.getElementById('file-upload-modal')?.click()}
-              className="flex-1 h-16 bg-slate-100 text-slate-600 rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-slate-200"
-            >
-              {previsualizacion ? 'Cambiar' : '📁 Archivo'}
-            </button>
-            {archivoSeleccionado && (
-              <button 
-                disabled={subiendo}
-                onClick={() => modalSubida.pedidoId && subirACloudinary(archivoSeleccionado, modalSubida.pedidoId)}
-                className={`flex-[2] h-16 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all ${
-                  subiendo ? 'bg-slate-400' : 'bg-blue-600 text-white hover:bg-blue-700'
-                }`}
-              >
-                {subiendo ? 'Subiendo...' : '🚀 Confirmar Subida'}
-              </button>
-            )}
+              <div className="border-2 border-dashed border-slate-200 rounded-3xl h-72 flex flex-col items-center justify-center bg-slate-50 overflow-hidden relative">
+                {previsualizacion ? (
+                  <img src={previsualizacion} alt="Preview" className="w-full h-full object-contain p-2" />
+                ) : (
+                  <div className="text-center p-8">
+                    <div className="w-20 h-20 bg-white rounded-3xl shadow-sm flex items-center justify-center mx-auto mb-4 text-4xl">🖼️</div>
+                    <p className="text-[12px] font-black text-slate-400 uppercase tracking-[2px] mb-2">
+                      Presiona <span className="text-blue-600 font-bold">CTRL + V</span>
+                    </p>
+                    <p className="text-[10px] text-slate-300 font-bold uppercase tracking-widest leading-relaxed">Pega la captura aquí o usa el botón de abajo</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-6 flex gap-3">
+                <input 
+                  type="file" accept="image/*" className="hidden" id="file-upload-modal"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) { 
+                      setArchivoSeleccionado(file); 
+                      setPrevisualizacion(URL.createObjectURL(file)); 
+                    }
+                  }} 
+                />
+                <button 
+                  onClick={() => document.getElementById('file-upload-modal')?.click()}
+                  className="flex-1 h-16 bg-slate-100 text-slate-600 rounded-2xl font-black text-[11px] uppercase tracking-widest hover:bg-slate-200"
+                >
+                  {previsualizacion ? 'Cambiar' : '📁 Archivo'}
+                </button>
+                {archivoSeleccionado && (
+                  <button 
+                    disabled={subiendo}
+                    onClick={() => modalSubida.pedidoId && subirACloudinary(archivoSeleccionado, modalSubida.pedidoId)}
+                    className={`flex-[2] h-16 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all ${
+                      subiendo ? 'bg-slate-400' : 'bg-blue-600 text-white hover:bg-blue-700'
+                    }`}
+                  >
+                    {subiendo ? 'Subiendo...' : '🚀 Confirmar Subida'}
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
+        )}
+{/* ========================================== */}
+{/* --- MODAL DASHBOARD DE ANÁLISIS REAL --- */}
+{/* ========================================== */}
+{mostrarDashboard && (
+  <div className="fixed inset-0 z-[200] bg-slate-900/90 backdrop-blur-xl flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div className="bg-[#F8FAFC] w-full max-w-3xl h-[95vh] sm:h-[90vh] sm:rounded-[40px] rounded-t-[40px] overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-300 flex flex-col">
+      
+      {/* HEADER */}
+      <div className="p-6 bg-white border-b border-slate-100 flex justify-between items-center">
+        <div>
+          <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic leading-none">Balance Financiero</h2>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Análisis Mensual Sugerido</p>
         </div>
+        <button 
+          onClick={() => setMostrarDashboard(false)}
+          className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center font-bold text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors"
+        >✕</button>
       </div>
-    )}
-  </main>
-);
-}
+
+      <div className="p-6 overflow-y-auto flex-1 scrollbar-hide">
+        
+        {(() => {
+          // --- LÓGICA CON TIPADO PARA TYPESCRIPT ---
+          const hoy = new Date();
+          const mesActual = hoy.getUTCMonth(); 
+          const anioActual = hoy.getUTCFullYear();
+
+          // 1. Filtrar Ventas (Caja Real)
+          const ventasDelMes = listaVentas.filter((v: any) => {
+            const f = new Date(v.fecha);
+            return f.getUTCMonth() === mesActual && f.getUTCFullYear() === anioActual;
+          });
+
+          // 2. Filtrar Gastos (Blindado)
+          const gastosDelMes = listaGastos.filter((g: any) => {
+            const f = new Date(g.fecha);
+            return f.getUTCMonth() === mesActual && f.getUTCFullYear() === anioActual;
+          });
+
+          const ingresosTotales = ventasDelMes.reduce((acc: number, v: any) => acc + (Number(v.pedido_total) || 0), 0);
+          const cobradoReal = ventasDelMes.reduce((acc: number, v: any) => acc + (Number(v.cuenta) || 0), 0);
+          
+          const totalGastos = gastosDelMes.reduce((acc: number, g: any) => {
+            const valor = typeof g.monto === 'string' ? parseFloat(g.monto) : Number(g.monto);
+            return acc + (valor || 0);
+          }, 0);
+
+          const utilidad = cobradoReal - totalGastos;
+          const porcentajeGasto = cobradoReal > 0 ? Math.round((totalGastos / cobradoReal) * 100) : 0;
+
+          return (
+            <>
+              {/* INDICADOR DE MES */}
+              <div className="mb-4 flex items-center gap-2">
+                <span className="px-4 py-1.5 bg-blue-600 text-white text-[10px] font-black rounded-full uppercase tracking-widest shadow-md shadow-blue-200">
+                   📍 {hoy.toLocaleString('es-ES', { month: 'long' }).toUpperCase()} {anioActual}
+                </span>
+              </div>
+
+              {/* TARJETAS DE RESULTADOS */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+                <div className="bg-white p-4 rounded-[25px] border border-slate-100 text-center shadow-sm">
+                  <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Ventas Brutas</p>
+                  <p className="text-lg font-black text-slate-800">{ingresosTotales.toLocaleString()} Bs.</p>
+                </div>
+                <div className="bg-emerald-500 p-4 rounded-[25px] text-white text-center shadow-lg shadow-emerald-100">
+                  <p className="text-[8px] font-black opacity-80 uppercase mb-1">Caja Real</p>
+                  <p className="text-lg font-black">{cobradoReal.toLocaleString()} Bs.</p>
+                </div>
+                <div className="bg-rose-500 p-4 rounded-[25px] text-white text-center shadow-lg shadow-rose-100">
+                  <p className="text-[8px] font-black opacity-80 uppercase mb-1">Egresos</p>
+                  <p className="text-lg font-black">{totalGastos.toLocaleString()} Bs.</p>
+                </div>
+                <div className="bg-slate-900 p-4 rounded-[25px] text-white text-center">
+                  <p className="text-[8px] font-black text-blue-400 uppercase mb-1">Ganancia</p>
+                  <p className="text-lg font-black text-emerald-400">{utilidad.toLocaleString()} Bs.</p>
+                </div>
+              </div>
+
+              {/* GRÁFICOS DINÁMICOS */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                <div className="bg-white p-6 rounded-[35px] border border-slate-100 shadow-sm">
+                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">Top Servicios (Mes)</h3>
+                  <div className="space-y-5">
+                    {Array.from(new Set(ventasDelMes.flatMap((v: any) => v.detalle_precios?.map((d: any) => d.servicio) || []))).slice(0, 4).map((servicio: any, i: number) => {
+                      const totalServicio = ventasDelMes.reduce((acc: number, v: any) => {
+                        const item = v.detalle_precios?.find((d: any) => d.servicio === servicio);
+                        return acc + (item ? Number(item.subtotal) : 0);
+                      }, 0);
+                      const porc = Math.min(Math.round((totalServicio / (ingresosTotales || 1)) * 100), 100);
+                      return (
+                        <div key={i}>
+                          <div className="flex justify-between text-[10px] font-black uppercase mb-1">
+                            <span className="text-slate-500">{servicio}</span>
+                            <span className="text-blue-600">{porc}%</span>
+                          </div>
+                          <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                            <div className="h-full bg-blue-600 rounded-full transition-all duration-700" style={{ width: `${porc}%` }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="bg-slate-900 p-6 rounded-[35px] text-white flex flex-col justify-center relative overflow-hidden shadow-xl">
+                  <h3 className="text-[10px] font-black text-slate-500 uppercase mb-4 z-10">Balance de Capital</h3>
+                  <div className="flex items-end gap-4 h-24 mb-4 z-10">
+                    <div className="flex-1 bg-emerald-500/20 border border-emerald-500/30 rounded-t-xl h-full flex items-center justify-center">
+                        <span className="text-[8px] rotate-90 font-black opacity-50">ENTRADAS</span>
+                    </div>
+                    <div className="flex-1 bg-rose-500 rounded-t-xl transition-all duration-1000" style={{ height: `${Math.min(porcentajeGasto, 100)}%` }}>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center z-10">
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
+                       {utilidad > 0 ? '✅ Operativo' : '❌ Déficit'}
+                    </p>
+                    <p className="text-[9px] font-bold text-rose-400 uppercase">
+                      {porcentajeGasto}% Gastado
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* TABLA DE AUDITORÍA DE GASTOS */}
+              <div className="bg-white rounded-[30px] border border-slate-100 overflow-hidden shadow-sm">
+                <div className="p-4 border-b border-slate-50 bg-rose-50/20 flex justify-between items-center">
+                  <h3 className="text-[10px] font-black text-rose-600 uppercase tracking-widest">Registros de Gastos: {hoy.toLocaleString('es-ES', { month: 'short' })}</h3>
+                </div>
+                <div className="divide-y divide-slate-50 max-h-[250px] overflow-y-auto">
+                  {gastosDelMes.length > 0 ? (
+                    gastosDelMes.map((g: any, i: number) => (
+                      <div key={i} className="p-4 flex justify-between items-center hover:bg-slate-50">
+                        <div className="flex flex-col text-left">
+                          <span className="text-xs font-bold text-slate-700 uppercase leading-none mb-1">{g.categoria}</span>
+                          <span className="text-[8px] text-slate-400 font-bold uppercase truncate max-w-[180px]">{g.descripcion || 'Sin detalle'}</span>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs font-black text-rose-600">-{Number(g.monto).toLocaleString()} Bs.</p>
+                          <p className="text-[7px] text-slate-300 font-bold">{new Date(g.fecha).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="p-10 text-center">
+                      <p className="text-[10px] text-slate-400 italic font-bold">Sin movimientos detectados este mes.</p>
+                      <p className="text-[8px] text-slate-300 mt-2">Total histórico: {listaGastos.length} gastos</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          );
+        })()}
+
+        <button className="w-full mt-6 h-16 bg-blue-600 rounded-[25px] font-black text-xs text-white uppercase tracking-[4px] shadow-lg shadow-blue-100 hover:bg-blue-700 active:scale-95 transition-all">
+          📥 Generar Informe PDF
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+      </main>
+    );
+    }
