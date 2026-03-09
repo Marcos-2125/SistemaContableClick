@@ -5,14 +5,33 @@ import { supabase } from './supabase';
 // <<< AÑADE ESTO AQUÍ >>>
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, 
-  ResponsiveContainer, PieChart, Pie, Cell 
+  ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, LabelList, LineChart, Line
 } from 'recharts';
 
+const getBoliviaISO = () => {
+  const ahora = new Date();
+  const boliviaTime = ahora.toLocaleString("en-US", {
+    timeZone: "America/La_Paz",
+    hour12: false
+  });
+  
+  const d = new Date(boliviaTime);
+  // Definimos que 'n' puede ser string o number para que TS esté feliz
+  const pad = (n: number | string) => n.toString().padStart(2, '0');
+  
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
 
 export default function Home() {
 // --- NAVEGACIÓN ---
 const [pestaña, setPestaña] = useState('inicio');
 const [accionInicio, setAccionInicio] = useState('menu');
+
+const [verTipoAuditoria, setVerTipoAuditoria] = useState('gastos'); // 'gastos' o 'ingresos'
+// <<< NUEVOS ESTADOS PARA EL FILTRO DE MES Y AÑO >>>
+  // Inicializamos con el mes y año actual de Bolivia
+  const [mesFiltro, setMesFiltro] = useState(new Date().getMonth()); 
+  const [anioFiltro, setAnioFiltro] = useState(new Date().getFullYear());
 
 // --- [NUEVO] ESTADO PARA SELECCIÓN DE PEDIDOS (ENTREGA SELECTIVA) ---
 // Guardamos los IDs de los trabajos que el cliente se está llevando físicamente
@@ -68,107 +87,167 @@ const [totalGastosHoy, setTotalGastosHoy] = useState<number>(0);
 const [mostrarDashboard, setMostrarDashboard] = useState(false);
 
 
-// --- FUNCIONES DE PROCESAMIENTO PARA GRÁFICOS ---
 const obtenerDatosVentasSemanales = () => {
+    // 1. Crear el mapa con tipado para evitar el error anterior
     const ventasMap: { [key: string]: number } = {};
-    const hoy = new Date();
     
-    for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(hoy.getDate() - i);
-        const fechaFormateada = d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' });
-        ventasMap[fechaFormateada] = 0;
+    // 2. Determinar cuántos días tiene EL MES ESPECÍFICO seleccionado
+    // mesFiltro + 1 porque en JS los meses van de 0 a 11, y el día 0 del mes siguiente es el último del actual.
+    const diasEnMes = new Date(anioFiltro, mesFiltro + 1, 0).getDate();
+
+    // 3. Llenamos el mapa con EXACTAMENTE esa cantidad de días (ni uno más, ni uno menos)
+    for (let i = 1; i <= diasEnMes; i++) {
+        const diaLabel = String(i).padStart(2, '0');
+        ventasMap[diaLabel] = 0;
     }
 
-    listaVentas.forEach(v => {
-        const fechaV = new Date(v.fecha).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' });
-        if (ventasMap[fechaV] !== undefined) {
-            ventasMap[fechaV] += (Number(v.pedido_total) || 0);
+    // 4. Filtrar y sumar las ventas
+    const mesPad = String(mesFiltro + 1).padStart(2, '0');
+    const patronFiltro = `${anioFiltro}-${mesPad}`;
+    
+    listaVentas.forEach((v: any) => {
+        if (v.fecha && String(v.fecha).includes(patronFiltro)) {
+            // Extraemos el día real de la fecha de la venta
+            const diaV = new Date(v.fecha).getUTCDate(); 
+            const diaLabel = String(diaV).padStart(2, '0');
+            
+            if (ventasMap.hasOwnProperty(diaLabel)) {
+                ventasMap[diaLabel] += (Number(v.cuenta) || 0);
+            }
         }
     });
 
-    return Object.entries(ventasMap).map(([name, total]) => ({ name, total }));
+    // 5. Convertir a array ordenado para el gráfico
+    return Object.entries(ventasMap)
+        .map(([name, total]) => ({ name, total }))
+        .sort((a, b) => Number(a.name) - Number(b.name));
 };
-
 const obtenerDatosServiciosPopulares = () => {
-    const conteo: { [key: string]: number } = {};
-    listaVentas.forEach(v => {
-        // Verificamos que detalle_precios exista y sea un array
-        if (v.detalle_precios && Array.isArray(v.detalle_precios)) {
-            v.detalle_precios.forEach((item: any) => {
-                // Si item.servicio es null, usamos "S/N" (Sin Nombre)
-                const nombre = item.servicio ? item.servicio.split(' ')[0] : "S/N";
-                conteo[nombre] = (conteo[nombre] || 0) + (Number(item.cantidad) || 0);
-            });
-        }
-    });
-    return Object.entries(conteo)
-        .map(([name, value]) => ({ name, value }))
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 5);
+  const conteo: { [key: string]: number } = {};
+  const mesPad = String(mesFiltro + 1).padStart(2, '0');
+  const patronFiltro = `${anioFiltro}-${mesPad}`;
+
+  const ventasDelMes = listaVentas.filter((v: any) => 
+    v.fecha && String(v.fecha).includes(patronFiltro)
+  );
+
+  let totalItemsMes = 0;
+
+  ventasDelMes.forEach((v: any) => {
+    if (v.detalle_precios && Array.isArray(v.detalle_precios)) {
+      v.detalle_precios.forEach((item: any) => {
+        const nombre = item.servicio ? item.servicio.split(' ')[0] : "S/N";
+        const cant = (Number(item.cantidad) || 1);
+        conteo[nombre] = (conteo[nombre] || 0) + cant;
+        totalItemsMes += cant;
+      });
+    }
+  });
+
+  return Object.entries(conteo).map(([name, value]) => ({
+    name,
+    value,
+    // Calculamos el porcentaje aquí para usarlo en el gráfico
+    porcentaje: totalItemsMes > 0 ? ((value / totalItemsMes) * 100).toFixed(0) : 0
+  })).sort((a, b) => b.value - a.value).slice(0, 5);
 };
 const COLORS_DASHBOARD = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
 
-// Función para el resumen rápido del dashboard
 const obtenerResumenFinanciero = () => {
-    const ventasTotales = listaVentas.reduce((acc, v) => acc + (Number(v.pedido_total) || 0), 0);
-    const ingresosTotales = listaVentas.reduce((acc, v) => acc + (Number(v.cuenta) || 0), 0);
-    const saldosPendientes = listaVentas.reduce((acc, v) => acc + (Number(v.saldo) || 0), 0);
-    return { ventasTotales, ingresosTotales, saldosPendientes };
+    const mesPad = String(mesFiltro + 1).padStart(2, '0');
+    const patronFiltro = `${anioFiltro}-${mesPad}`;
+
+    // Filtrado por texto (Evita errores de zona horaria)
+    const ventasDelMes = listaVentas.filter(v => 
+        v.fecha && String(v.fecha).includes(patronFiltro)
+    );
+
+    const gastosDelMes = listaGastos.filter(g => 
+        g.fecha && String(g.fecha).includes(patronFiltro)
+    );
+
+    const ventasTotales = ventasDelMes.reduce((acc, v) => acc + (Number(v.pedido_total) || 0), 0);
+    const ingresosTotales = ventasDelMes.reduce((acc, v) => acc + (Number(v.cuenta) || 0), 0);
+    const saldosPendientes = ventasDelMes.reduce((acc, v) => acc + (Number(v.saldo) || 0), 0);
+    const egresosTotales = gastosDelMes.reduce((acc, g) => acc + (Number(g.monto) || 0), 0);
+    
+    return { ventasTotales, ingresosTotales, saldosPendientes, egresosTotales };
+};
+const obtenerDatosVS = () => {
+  // Definimos el tipo del objeto para que acepte cualquier string como llave
+  const conteo: { [key: string]: number } = {
+    DECORADORA: 0,
+    EMPRESA: 0,
+    REGULAR: 0
+  };
+
+  const mesPad = String(mesFiltro + 1).padStart(2, '0');
+  const patronFiltro = `${anioFiltro}-${mesPad}`;
+
+  // Filtramos las ventas del mes seleccionado
+  const ventasDelMes = listaVentas.filter((v: any) => 
+    v.fecha && String(v.fecha).includes(patronFiltro)
+  );
+
+  ventasDelMes.forEach((v: any) => {
+    // Buscamos el tipo de cliente con una limpieza de strings para mayor seguridad
+    const clienteEncontrado = listaClientes.find(
+      (c: any) => c.Nombre?.trim().toUpperCase() === v.nombre_cliente?.trim().toUpperCase()
+    );
+    
+    // Forzamos el tipo a mayúsculas o asignamos REGULAR por defecto
+    const tipo = (clienteEncontrado?.Tipo?.toUpperCase() || 'REGULAR') as string; 
+    
+    if (conteo.hasOwnProperty(tipo)) {
+      conteo[tipo] += (Number(v.pedido_total) || 0);
+    } else {
+      conteo['REGULAR'] += (Number(v.pedido_total) || 0);
+    }
+  });
+
+  return Object.entries(conteo).map(([name, total]) => ({
+    name,
+    total
+  }));
 };
 // ==========================================
   // --- FUNCIÓN PARA REFRESCAR TOTALES (NUEVO) ---
   // ==========================================
 const refrescarTotalesHoy = async () => {
-  // 1. Definimos el inicio y el fin del día en la zona horaria local
-  const inicio = new Date();
-  inicio.setHours(0, 0, 0, 0);
+  // 1. Obtenemos solo la fecha (YYYY-MM-DD) de Bolivia
+  const fechaBolivia = getBoliviaISO().split('T')[0];
 
-  const fin = new Date();
-  fin.setHours(23, 59, 59, 999);
+  // Definimos el rango de tiempo: desde las 00:00:00 hasta las 23:59:59
+  const isoInicio = `${fechaBolivia}T00:00:00`;
+  const isoFin = `${fechaBolivia}T23:59:59`;
 
-  // Convertimos a formato ISO que Supabase entiende perfectamente para Timestamps
-  const isoInicio = inicio.toISOString();
-  const isoFin = fin.toISOString();
-
-  console.log("Consultando desde:", isoInicio, "hasta:", isoFin);
-
-  // 2. Sumar Gastos
-  const { data: dataGastos, error: errG } = await supabase
+  // 2. Consultar Gastos de hoy
+  const { data: dataGastos } = await supabase
     .from('gastos')
     .select('monto')
     .gte('fecha', isoInicio)
     .lte('fecha', isoFin);
   
-  if (errG) console.error("Error Gastos:", errG);
   const sumaGastos = dataGastos?.reduce((acc, g) => acc + (Number(g.monto) || 0), 0) || 0;
   setTotalGastosHoy(sumaGastos);
 
-  // 3. Sumar Ingresos Inteligente
-  const { data: dataVentas, error: errV } = await supabase
+  // 3. Consultar Ingresos de hoy
+  const { data: dataVentas } = await supabase
     .from('registro_ventas')
-    .select('cuenta, pedido_total, estado, saldo')
+    .select('cuenta, pedido_total, estado')
     .gte('fecha', isoInicio)
     .lte('fecha', isoFin);
 
   const sumaIngresos = dataVentas?.reduce((acc, v) => {
-    // Si el pedido aún está pendiente, sumamos solo el adelanto (cuenta)
-    if (v.estado === 'Pendiente') {
-      return acc + (Number(v.cuenta) || 0);
-    } 
-    // Si el pedido ya se entregó hoy, el ingreso total es lo que pagó el cliente (pedido_total)
-    else {
-      return acc + (Number(v.pedido_total) || 0);
-    }
+    // Si el pedido es nuevo de hoy (Pendiente), sumamos el adelanto (cuenta)
+    // Si se marcó como entregado hoy, sumamos el total (porque se supone que ya cobraste todo)
+    return v.estado === 'Pendiente' ? acc + (Number(v.cuenta) || 0) : acc + (Number(v.pedido_total) || 0);
   }, 0) || 0;
 
   setTotalIngresosHoy(sumaIngresos);
-  }
+};
   // ==========================================
   // --- CARGAR DATOS AL INICIAR ---
-  // ==========================================
- // ==========================================
-  // --- CARGAR DATOS AL INICIAR (CORREGIDO) ---
   // ==========================================
   useEffect(() => {
     async function descargarDatosIniciales() {
@@ -246,51 +325,54 @@ const refrescarTotalesHoy = async () => {
     }
   };
 
-  const guardarGastoRealBD = async () => {
-    if (!gastoMonto || Number(gastoMonto) <= 0) return alert("Por favor, ingresa un monto válido");
-    if (!gastoCategoria) return alert("Debes seleccionar una categoría");
+ const guardarGastoRealBD = async () => {
+  if (!gastoMonto || Number(gastoMonto) <= 0) return alert("Por favor, ingresa un monto válido");
+  if (!gastoCategoria) return alert("Debes seleccionar una categoría");
 
-    const { error } = await supabase
-      .from('gastos')
-      .insert([{
-        categoria: gastoCategoria,
-        monto: Number(gastoMonto),
-        descripcion: gastoDetalle.toUpperCase().trim(),
-        fecha: new Date().toISOString()
-      }]);
+  // USAMOS LA HORA FIJA DE BOLIVIA PARA EL REGISTRO
+  const fechaFija = getBoliviaISO();
 
-    if (!error) {
-      // --- ESTO ES LO QUE FALTABA ---
-      await refrescarTotalesHoy(); 
-      // ------------------------------
+  const { error } = await supabase
+    .from('gastos')
+    .insert([{
+      categoria: gastoCategoria,
+      monto: Number(gastoMonto),
+      descripcion: gastoDetalle.toUpperCase().trim(),
+      fecha: fechaFija // <--- FECHA UNIFICADA
+    }]);
 
-      alert("Gasto registrado correctamente 💸");
-      setGastoMonto('');
-      setGastoDetalle('');
-      setGastoCategoria('');
-      setAccionInicio('menu'); 
-    } else {
-      alert("Error al registrar el gasto: " + error.message);
-    }
-  };
+  if (!error) {
+    // Refrescamos los círculos superiores inmediatamente
+    await refrescarTotalesHoy(); 
+    
+    alert("Gasto registrado correctamente 💸");
+    setGastoMonto('');
+    setGastoDetalle('');
+    setGastoCategoria('');
+    setAccionInicio('menu'); 
+  } else {
+    alert("Error al registrar el gasto: " + error.message);
+  }
+};
  // <<< LÓGICA ACTUALIZADA: VENTAS, GASTOS Y CLIENTES >>>
 
 const cargarDatosVentas = async () => {
-  const unMesAtras = new Date();
-  unMesAtras.setMonth(unMesAtras.getMonth() - 1);
+  // Traemos los datos de todo el año actual para que el dashboard funcione
+  const anioActual = new Date().getFullYear();
+  const fechaInicioAnio = `${anioActual}-01-01`;
 
   const { data, error } = await supabase
     .from('registro_ventas')
     .select('*')
-    .gte('fecha', unMesAtras.toISOString()) 
+    .gte('fecha', fechaInicioAnio) // Trae todo desde el 1 de enero
     .order('fecha', { ascending: false });
 
   if (data) setListaVentas(data);
-  if (error) console.error("Error cargando histórico de ventas:", error);
+  if (error) console.error("Error cargando ventas:", error);
 };
 
 const cargarHistorialGastos = async () => {
-  // Traemos TODOS los gastos para asegurar que se vean
+  // 1. Traemos los gastos ordenados por fecha
   const { data, error } = await supabase
     .from('gastos')
     .select('*')
@@ -302,14 +384,16 @@ const cargarHistorialGastos = async () => {
   }
 
   if (data) {
-    console.log("Gastos detectados en BD:", data.length); // Mira esto en la consola (F12)
+    // 2. Limpiamos los datos de forma simple
+    // Quitamos la lógica de 'new Date()' aquí para evitar desfases de zona horaria
     const datosLimpios = data.map(g => ({
       ...g,
       monto: Number(g.monto) || 0,
-      // Extraemos mes y año para agrupar después
-      mes: new Date(g.fecha).getMonth() + 1,
-      anio: new Date(g.fecha).getFullYear()
+      // Mantenemos la fecha como un String puro para filtrarlo luego por texto
+      fecha: g.fecha 
     }));
+
+    console.log("Gastos cargados:", datosLimpios.length);
     setListaGastos(datosLimpios);
   }
 };
@@ -345,7 +429,7 @@ const eliminarCliente = async (id: number, nombre: string) => {
 };
 
 // ==========================================
-// --- FINALIZAR PEDIDO (CON REFRESCO TOTAL) ---
+// --- FINALIZAR PEDIDO (CORREGIDO) ---
 // ==========================================
 const finalizarPedido = async () => {
   if (trabajos.length === 0) return alert("Debes agregar al menos un trabajo");
@@ -353,6 +437,10 @@ const finalizarPedido = async () => {
 
   try {
     const idPedidoActual = Date.now(); 
+    // OBTENEMOS LA FECHA ACTUAL DE BOLIVIA
+    const fechaFijaBolivia = getBoliviaISO(); 
+
+    const nombreLimpio = nombreClienteInput.toUpperCase().trim();
     const totalNuevoTrabajo = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
     
     const desglosePreciosNuevos = trabajos.map(t => ({
@@ -368,31 +456,34 @@ const finalizarPedido = async () => {
     // PASO A: INSERTAR EN TALLER
     const filasParaTaller = trabajos.map(t => ({
       id_pedido: idPedidoActual,
-      nombre_cliente: nombreClienteInput.toUpperCase().trim(),
+      nombre_cliente: nombreLimpio,
       servicio: t.servicio,
       ancho: t.ancho,
       alto: t.alto,
       cantidad: Number(t.cant),
       detalle: t.detalle || '',
-      estado: 'Pendiente'
+      estado: 'Pendiente',
+      fecha: fechaFijaBolivia // <--- SE AGREGA FECHA DE BOLIVIA
     }));
 
     const { error: errorTaller } = await supabase.from('pedidos_activos').insert(filasParaTaller);
     if (errorTaller) throw errorTaller;
 
-    // PASO B: ACTUALIZAR O CREAR EN CAJA
+    // PASO B: ACTUALIZAR O CREAR EN CAJA (REGISTRO_VENTAS)
     const { data: pedidoExistente } = await supabase
       .from('registro_ventas')
       .select('*')
-      .eq('nombre_cliente', nombreClienteInput.toUpperCase().trim())
+      .eq('nombre_cliente', nombreLimpio)
       .eq('estado', 'Pendiente')
       .maybeSingle();
 
     if (pedidoExistente) {
+      // Si el cliente ya tiene una deuda pendiente, sumamos el nuevo pedido a la misma cuenta
       const preciosPrevios = Array.isArray(pedidoExistente.detalle_precios) ? pedidoExistente.detalle_precios : [];
       const nuevoDesgloseTotal = [...preciosPrevios, ...desglosePreciosNuevos];
-      const nuevoTotalGlobal = Number(pedidoExistente.pedido_total) + totalNuevoTrabajo;
-      const nuevaCuentaGlobal = Number(pedidoExistente.cuenta) + Number(montoAcuenta);
+      
+      const nuevoTotalGlobal = (Number(pedidoExistente.pedido_total) || 0) + totalNuevoTrabajo;
+      const nuevaCuentaGlobal = (Number(pedidoExistente.cuenta) || 0) + (Number(montoAcuenta) || 0);
       const nuevoSaldoGlobal = Math.max(0, nuevoTotalGlobal - nuevaCuentaGlobal);
 
       const { error: errorUpdate } = await supabase
@@ -402,39 +493,46 @@ const finalizarPedido = async () => {
           detalle_precios: nuevoDesgloseTotal, 
           pedido_total: nuevoTotalGlobal,
           cuenta: nuevaCuentaGlobal,
-          saldo: nuevoSaldoGlobal
+          saldo: nuevoSaldoGlobal,
+          fecha: fechaFijaBolivia // <--- ACTUALIZAMOS LA FECHA AL DÍA DE HOY
         })
         .eq('id_pedido', pedidoExistente.id_pedido);
         
       if (errorUpdate) throw errorUpdate;
     } else {
+      // Si es un cliente nuevo o sin deudas, creamos un registro nuevo
       const totalVenta = totalNuevoTrabajo;
-      const cuentaVenta = Number(montoAcuenta);
+      const cuentaVenta = Number(montoAcuenta) || 0;
       const saldoVenta = totalVenta - cuentaVenta;
 
       const { error: errorVenta } = await supabase
         .from('registro_ventas')
         .insert([{
           id_pedido: idPedidoActual,
-          nombre_cliente: nombreClienteInput.toUpperCase().trim(),
+          nombre_cliente: nombreLimpio,
           telefono_cliente: telClienteInput,
           detalle_servicio: resumenDetalleNuevo,
           detalle_precios: desglosePreciosNuevos, 
           pedido_total: totalVenta,
           cuenta: cuentaVenta,
           saldo: saldoVenta,
-          estado: 'Pendiente'
+          estado: 'Pendiente',
+          fecha: fechaFijaBolivia // <--- SE AGREGA FECHA DE BOLIVIA
         }]);
+        
       if (errorVenta) throw errorVenta;
     }
 
-    // --- ACTUALIZACIÓN MASIVA DE DATOS ---
-    await refrescarTotalesHoy(); // Actualiza círculos de arriba
-    await cargarDatosVentas();   // Actualiza lista de ventas del Dashboard
-    await cargarHistorialGastos(); // Asegura que los gastos no se pierdan al refrescar
+    // --- ACTUALIZACIÓN MASIVA DE DATOS Y RESETEO (OPTIMIZADO) ---
+await Promise.all([
+  refrescarTotalesHoy(),
+  cargarDatosVentas(),
+  cargarHistorialGastos()
+]);
     
     alert("¡Pedido guardado correctamente! 🚀");
     
+    // Limpiamos los campos para el siguiente cliente
     setTrabajos([]);
     setNombreClienteInput('');
     setTelClienteInput('');
@@ -468,53 +566,67 @@ const finalizarPedido = async () => {
 const entregarPedidoFinalv2 = async (nombreCliente: string) => {
   try {
     const nombreLimpio = nombreCliente.trim();
-    
-    // 1. Buscamos la venta activa de este cliente
-    const ventaActual = listaVentas.find(v => v.nombre_cliente?.trim() === nombreLimpio && v.estado === 'Pendiente');
+    const fechaHoy = getBoliviaISO();
+
+    // 1. Buscamos la venta sin restringir el estado (puede ser Pendiente o Entregado)
+    const ventaActual = listaVentas.find(v => v.nombre_cliente?.trim() === nombreLimpio);
     
     if (!ventaActual) {
-      alert("No se encontró deuda pendiente para: " + nombreLimpio);
+      alert("No se encontró ningún registro para: " + nombreLimpio);
       return;
     }
 
-    // 2. Preguntar cuánto paga hoy
     const saldoActual = Number(ventaActual.saldo) || 0;
-    const montoIngresado = window.prompt(
-      `CLIENTE: ${nombreLimpio}\nSALDO PENDIENTE: ${saldoActual} Bs.\n\n¿Cuánto está pagando/abonando ahora?`, 
-      saldoActual.toString()
-    );
+    let pagoHoy = 0;
 
-    if (montoIngresado === null) return; // Si cancela el prompt
+    // 2. Lógica inteligente de cobro
+    if (saldoActual > 0) {
+      // Si todavía debe, pedimos el pago
+      const montoIngresado = window.prompt(
+        `CLIENTE: ${nombreLimpio}\nSALDO PENDIENTE: ${saldoActual} Bs.\n\n¿Cuánto está pagando ahora?`, 
+        saldoActual.toString()
+      );
+      if (montoIngresado === null) return; 
+      pagoHoy = parseFloat(montoIngresado) || 0;
+    } else {
+      // SI YA ESTÁ PAGADO: Mostramos aviso informativo y seguimos al despacho
+      alert(`✅ El pedido de ${nombreLimpio} ya estaba pagado.\nProcediendo a registrar la salida física del taller...`);
+    }
 
-    const pagoHoy = parseFloat(montoIngresado) || 0;
-    const nuevoSaldo = Math.max(0, saldoActual - pagoHoy);
-    const nuevaCuenta = (Number(ventaActual.cuenta) || 0) + pagoHoy;
+    // 3. ACTUALIZAR CAJA (Solo si hay un pago nuevo o si hay que cerrar un 'Pendiente')
+    if (pagoHoy > 0 || (ventaActual.estado === 'Pendiente' && saldoActual === 0)) {
+      const nuevoSaldo = Math.max(0, saldoActual - pagoHoy);
+      const nuevaCuenta = (Number(ventaActual.cuenta) || 0) + pagoHoy;
 
-    // 3. ACTUALIZAR CAJA (registro_ventas)
-    const { error: errVenta } = await supabase
-      .from('registro_ventas')
-      .update({ 
-        cuenta: nuevaCuenta, 
-        saldo: nuevoSaldo,
-        estado: nuevoSaldo === 0 ? 'Entregado' : 'Pendiente' 
-      })
-      .eq('id_pedido', ventaActual.id_pedido);
+      const { error: errVenta } = await supabase
+        .from('registro_ventas')
+        .update({ 
+          cuenta: nuevaCuenta, 
+          saldo: nuevoSaldo,
+          estado: nuevoSaldo === 0 ? 'Entregado' : 'Pendiente',
+          fecha: fechaHoy 
+        })
+        .eq('id_pedido', ventaActual.id_pedido);
+        
+      if (errVenta) throw errVenta;
+    }
 
-    if (errVenta) throw errVenta;
-
-    // 4. ARCHIVAR EN TALLER (Solo los IDs marcados en los checkboxes)
+    // 4. ARCHIVAR TRABAJOS EN TALLER (Esta es la parte del "Despacho")
     if (pedidosSeleccionados.length > 0) {
       const { error: errTaller } = await supabase
         .from('pedidos_activos')
-        .update({ estado: 'Archivado' })
-        .in('id', pedidosSeleccionados); // Filtra por la lista de seleccionados
+        .update({ 
+            estado: 'Archivado',
+            fecha_entrega: fechaHoy 
+        })
+        .in('id', pedidosSeleccionados);
 
       if (errTaller) throw errTaller;
     }
 
-    alert(`✅ Cobro registrado: ${pagoHoy} Bs.\nSaldo restante: ${nuevoSaldo} Bs.`);
+    alert(`🚀 ¡Despacho finalizado con éxito!`);
     
-    // 5. Limpiar y refrescar
+    // Limpieza de estados y refresco de UI
     setPedidosSeleccionados([]);
     await cargarDatosVentas();
     await cargarPedidosTaller();
@@ -522,7 +634,7 @@ const entregarPedidoFinalv2 = async (nombreCliente: string) => {
 
   } catch (err: any) { 
     console.error(err);
-    alert("Error: " + err.message); 
+    alert("Error en el proceso: " + err.message); 
   }
 };
   // ==========================================
@@ -577,15 +689,17 @@ const entregarPedidoFinalv2 = async (nombreCliente: string) => {
   };
 
   // <<< EFECTO DE CARGA SEGÚN PESTAÑA >>>
- useEffect(() => {
-  // CADA VEZ que cambies de pestaña, reseteamos la selección para evitar errores
+// <<< EFECTO DE CARGA SEGÚN PESTAÑA Y DASHBOARD >>>
+useEffect(() => {
   setPedidosSeleccionados([]); 
 
-  if (pestaña === 'pedidos' || pestaña === 'taller' || pestaña === 'reportes') {
+  // Si entras a reportes, taller O SI EL DASHBOARD SE ABRE, cargamos gastos
+  if (pestaña === 'pedidos' || pestaña === 'taller' || pestaña === 'reportes' || mostrarDashboard === true) {
     cargarPedidosTaller();
     cargarDatosVentas();
+    cargarHistorialGastos(); // <--- Esto es lo que llena la memoria de egresos
   }
-}, [pestaña]);
+}, [pestaña, mostrarDashboard]); // <--- Agregamos mostrarDashboard aquí
 
   // --- FUNCIONES DE SERVICIOS ---
   const eliminarServicio = async (nombreEliminar: string) => {
@@ -1635,61 +1749,126 @@ const entregarPedidoFinalv2 = async (nombreCliente: string) => {
   <div className="fixed inset-0 z-[200] bg-slate-900/90 backdrop-blur-xl flex items-end sm:items-center justify-center p-0 sm:p-4">
     <div className="bg-[#F8FAFC] w-full max-w-3xl h-[95vh] sm:h-[90vh] sm:rounded-[40px] rounded-t-[40px] overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-300 flex flex-col">
       
-      {/* HEADER */}
+      {/* HEADER ÚNICO */}
       <div className="p-6 bg-white border-b border-slate-100 flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic leading-none">Balance Financiero</h2>
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Análisis Mensual Sugerido</p>
+          <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic leading-none">
+            Balance Financiero
+          </h2>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+              Análisis en tiempo real • {anioFiltro}
+            </p>
+          </div>
         </div>
+        
         <button 
-          onClick={() => setMostrarDashboard(false)}
-          className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center font-bold text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors"
+          onClick={() => {
+            setMostrarDashboard(false);
+            setPedidosSeleccionados([]); 
+          }}
+          className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center font-bold text-slate-400 hover:bg-rose-50 hover:text-rose-500 transition-all shadow-sm"
         >✕</button>
       </div>
 
-      <div className="p-6 overflow-y-auto flex-1 scrollbar-hide">
+      <div className="p-6 overflow-y-auto flex-1 scrollbar-hide bg-[#F8FAFC]">
+        
+        {/* SELECTORES DE TIEMPO */}
+        <div className="flex flex-wrap gap-2 mb-6 bg-white p-4 rounded-3xl shadow-sm border border-slate-100 items-center">
+          <select 
+            value={mesFiltro} 
+            onChange={(e) => setMesFiltro(Number(e.target.value))}
+            className="flex-1 bg-slate-50 border-none text-slate-700 font-black text-[10px] uppercase rounded-xl p-3 outline-none cursor-pointer"
+          >
+            {["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"].map((m, i) => (
+              <option key={i} value={i}>{m}</option>
+            ))}
+          </select>
+
+          <select 
+            value={anioFiltro} 
+            onChange={(e) => setAnioFiltro(Number(e.target.value))}
+            className="w-24 bg-slate-50 border-none text-slate-700 font-black text-[10px] uppercase rounded-xl p-3 outline-none cursor-pointer"
+          >
+            {[2024, 2025, 2026].map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </div>
         
         {(() => {
-          // --- LÓGICA CON TIPADO PARA TYPESCRIPT ---
-          const hoy = new Date();
-          const mesActual = hoy.getUTCMonth(); 
-          const anioActual = hoy.getUTCFullYear();
+          const mesPad = String(mesFiltro + 1).padStart(2, '0');
+          const patron = `${anioFiltro}-${mesPad}`;
 
-          // 1. Filtrar Ventas (Caja Real)
-          const ventasDelMes = listaVentas.filter((v: any) => {
-            const f = new Date(v.fecha);
-            return f.getUTCMonth() === mesActual && f.getUTCFullYear() === anioActual;
-          });
-
-          // 2. Filtrar Gastos (Blindado)
-          const gastosDelMes = listaGastos.filter((g: any) => {
-            const f = new Date(g.fecha);
-            return f.getUTCMonth() === mesActual && f.getUTCFullYear() === anioActual;
-          });
+          const ventasDelMes = listaVentas.filter((v: any) => v.fecha && String(v.fecha).includes(patron));
+          const gastosDelMes = listaGastos.filter((g: any) => g.fecha && String(g.fecha).includes(patron));
 
           const ingresosTotales = ventasDelMes.reduce((acc: number, v: any) => acc + (Number(v.pedido_total) || 0), 0);
           const cobradoReal = ventasDelMes.reduce((acc: number, v: any) => acc + (Number(v.cuenta) || 0), 0);
-          
-          const totalGastos = gastosDelMes.reduce((acc: number, g: any) => {
-            const valor = typeof g.monto === 'string' ? parseFloat(g.monto) : Number(g.monto);
-            return acc + (valor || 0);
-          }, 0);
-
+          const totalGastos = gastosDelMes.reduce((acc: number, g: any) => acc + (Number(g.monto) || 0), 0);
           const utilidad = cobradoReal - totalGastos;
-          const porcentajeGasto = cobradoReal > 0 ? Math.round((totalGastos / cobradoReal) * 100) : 0;
+
+          // --- LÓGICA ACUMULATIVA ---
+          const obtenerDatosComparativosLíneas = () => {
+            const diasEnMes = new Date(anioFiltro, mesFiltro + 1, 0).getDate();
+            const datos = [];
+            let acIn = 0; 
+            let acEg = 0; 
+
+            for (let d = 1; d <= diasEnMes; d++) {
+              const diaPad = String(d).padStart(2, '0');
+              const fechaDia = `${patron}-${diaPad}`;
+              
+              const ingresosDia = ventasDelMes
+                .filter((v: any) => String(v.fecha).startsWith(fechaDia))
+                .reduce((acc: number, v: any) => acc + (Number(v.cuenta) || 0), 0);
+                
+              const gastosDia = gastosDelMes
+                .filter((g: any) => String(g.fecha).startsWith(fechaDia))
+                .reduce((acc: number, g: any) => acc + (Number(g.monto) || 0), 0);
+
+              acIn += ingresosDia;
+              acEg += gastosDia;
+
+              datos.push({ 
+                dia: d, 
+                ingresos: acIn, 
+                egresos: acEg 
+              });
+            }
+            return datos;
+          };
+          const datosLíneas = obtenerDatosComparativosLíneas();
+
+          const obtenerDatosServiciosPopularesConPorcentaje = () => {
+            const conteo: { [key: string]: number } = {};
+            let totalGeneral = 0;
+            ventasDelMes.forEach((v: any) => {
+              if (v.detalle_precios && Array.isArray(v.detalle_precios)) {
+                v.detalle_precios.forEach((item: any) => {
+                  const nombre = item.servicio ? item.servicio.split(' ')[0] : "S/N";
+                  const cant = Number(item.cantidad) || 1;
+                  conteo[nombre] = (conteo[nombre] || 0) + cant;
+                  totalGeneral += cant;
+                });
+              }
+            });
+            return Object.entries(conteo).map(([name, value]) => ({
+              name,
+              value,
+              porcentaje: totalGeneral > 0 ? ((value / totalGeneral) * 100).toFixed(0) : 0
+            })).sort((a, b) => b.value - a.value).slice(0, 5);
+          };
+
+          const datosServicios = obtenerDatosServiciosPopularesConPorcentaje();
 
           return (
             <>
-              {/* INDICADOR DE MES */}
-              <div className="mb-4 flex items-center gap-2">
-                <span className="px-4 py-1.5 bg-blue-600 text-white text-[10px] font-black rounded-full uppercase tracking-widest shadow-md shadow-blue-200">
-                   📍 {hoy.toLocaleString('es-ES', { month: 'long' }).toUpperCase()} {anioActual}
-                </span>
-              </div>
-
               {/* TARJETAS DE RESULTADOS */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
-                <div className="bg-white p-4 rounded-[25px] border border-slate-100 text-center shadow-sm">
+                <div className="bg-white p-4 rounded-[25px] border border-slate-100 text-center">
                   <p className="text-[8px] font-black text-slate-400 uppercase mb-1">Ventas Brutas</p>
                   <p className="text-lg font-black text-slate-800">{ingresosTotales.toLocaleString()} Bs.</p>
                 </div>
@@ -1707,60 +1886,22 @@ const entregarPedidoFinalv2 = async (nombreCliente: string) => {
                 </div>
               </div>
 
-              {/* GRÁFICOS DINÁMICOS */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-                <div className="bg-white p-6 rounded-[35px] border border-slate-100 shadow-sm">
-                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-6">Top Servicios (Mes)</h3>
-                  <div className="space-y-5">
-                    {Array.from(new Set(ventasDelMes.flatMap((v: any) => v.detalle_precios?.map((d: any) => d.servicio) || []))).slice(0, 4).map((servicio: any, i: number) => {
-                      const totalServicio = ventasDelMes.reduce((acc: number, v: any) => {
-                        const item = v.detalle_precios?.find((d: any) => d.servicio === servicio);
-                        return acc + (item ? Number(item.subtotal) : 0);
-                      }, 0);
-                      const porc = Math.min(Math.round((totalServicio / (ingresosTotales || 1)) * 100), 100);
-                      return (
-                        <div key={i}>
-                          <div className="flex justify-between text-[10px] font-black uppercase mb-1">
-                            <span className="text-slate-500">{servicio}</span>
-                            <span className="text-blue-600">{porc}%</span>
-                          </div>
-                          <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
-                            <div className="h-full bg-blue-600 rounded-full transition-all duration-700" style={{ width: `${porc}%` }} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="bg-slate-900 p-6 rounded-[35px] text-white flex flex-col justify-center relative overflow-hidden shadow-xl">
-                  <h3 className="text-[10px] font-black text-slate-500 uppercase mb-4 z-10">Balance de Capital</h3>
-                  <div className="flex items-end gap-4 h-24 mb-4 z-10">
-                    <div className="flex-1 bg-emerald-500/20 border border-emerald-500/30 rounded-t-xl h-full flex items-center justify-center">
-                        <span className="text-[8px] rotate-90 font-black opacity-50">ENTRADAS</span>
-                    </div>
-                    <div className="flex-1 bg-rose-500 rounded-t-xl transition-all duration-1000" style={{ height: `${Math.min(porcentajeGasto, 100)}%` }}>
-                    </div>
-                  </div>
-                  <div className="flex justify-between items-center z-10">
-                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
-                       {utilidad > 0 ? '✅ Operativo' : '❌ Déficit'}
-                    </p>
-                    <p className="text-[9px] font-bold text-rose-400 uppercase">
-                      {porcentajeGasto}% Gastado
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* TABLA DE AUDITORÍA DE GASTOS */}
+              {/* AUDITORÍA DUAL */}
               <div className="bg-white rounded-[30px] border border-slate-100 overflow-hidden shadow-sm">
-                <div className="p-4 border-b border-slate-50 bg-rose-50/20 flex justify-between items-center">
-                  <h3 className="text-[10px] font-black text-rose-600 uppercase tracking-widest">Registros de Gastos: {hoy.toLocaleString('es-ES', { month: 'short' })}</h3>
+                <div className="flex border-b border-slate-50 bg-slate-50/30">
+                  <button 
+                    onClick={() => setVerTipoAuditoria('gastos')}
+                    className={`flex-1 py-3 text-[9px] font-black uppercase tracking-[2px] transition-all ${verTipoAuditoria === 'gastos' ? 'text-rose-600 bg-white border-b-2 border-rose-600' : 'text-slate-400 opacity-60'}`}
+                  >📉 Egresos</button>
+                  <button 
+                    onClick={() => setVerTipoAuditoria('ingresos')}
+                    className={`flex-1 py-3 text-[9px] font-black uppercase tracking-[2px] transition-all ${verTipoAuditoria === 'ingresos' ? 'text-emerald-600 bg-white border-b-2 border-emerald-600' : 'text-slate-400 opacity-60'}`}
+                  >📈 Ingresos</button>
                 </div>
-                <div className="divide-y divide-slate-50 max-h-[250px] overflow-y-auto">
-                  {gastosDelMes.length > 0 ? (
-                    gastosDelMes.map((g: any, i: number) => (
+
+                <div className="divide-y divide-slate-50 max-h-[280px] overflow-y-auto scrollbar-hide">
+                  {verTipoAuditoria === 'gastos' ? (
+                    gastosDelMes.length > 0 ? gastosDelMes.map((g: any, i: number) => (
                       <div key={i} className="p-4 flex justify-between items-center hover:bg-slate-50">
                         <div className="flex flex-col text-left">
                           <span className="text-xs font-bold text-slate-700 uppercase leading-none mb-1">{g.categoria}</span>
@@ -1768,25 +1909,197 @@ const entregarPedidoFinalv2 = async (nombreCliente: string) => {
                         </div>
                         <div className="text-right">
                           <p className="text-xs font-black text-rose-600">-{Number(g.monto).toLocaleString()} Bs.</p>
-                          <p className="text-[7px] text-slate-300 font-bold">{new Date(g.fecha).toLocaleDateString()}</p>
+                          <p className="text-[7px] text-slate-300 font-bold">{g.fecha?.split('T')[0]}</p>
                         </div>
                       </div>
-                    ))
+                    )) : <div className="p-10 text-center text-[10px] font-bold text-slate-400 uppercase">No hay gastos en {patron}</div>
                   ) : (
-                    <div className="p-10 text-center">
-                      <p className="text-[10px] text-slate-400 italic font-bold">Sin movimientos detectados este mes.</p>
-                      <p className="text-[8px] text-slate-300 mt-2">Total histórico: {listaGastos.length} gastos</p>
-                    </div>
+                    ventasDelMes.length > 0 ? ventasDelMes.map((v: any, i: number) => (
+                      <div key={i} className="p-4 flex justify-between items-center hover:bg-slate-50 border-l-4 border-l-emerald-400/20">
+                        <div className="flex flex-col text-left">
+                          <span className="text-xs font-bold text-slate-700 uppercase leading-none mb-1">{v.nombre_cliente}</span>
+                          <span className="text-[8px] text-emerald-500 font-bold uppercase truncate max-w-[200px]">{v.detalle_servicio || 'Servicio registrado'}</span>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs font-black text-emerald-600">+{Number(v.cuenta).toLocaleString()} Bs.</p>
+                          <p className="text-[7px] text-slate-300 font-bold">{v.fecha?.split('T')[0]}</p>
+                        </div>
+                      </div>
+                    )) : <div className="p-10 text-center text-[10px] font-bold text-slate-400 uppercase">No hay ingresos en {patron}</div>
                   )}
                 </div>
+              </div>
+
+              {/* BOTÓN GENERAR INFORME */}
+              <button className="w-full mt-6 h-16 bg-blue-600 rounded-[25px] font-black text-xs text-white uppercase tracking-[4px] shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95">
+                📥 Generar Informe
+              </button>
+
+              <div className="flex items-center gap-4 my-10">
+                <div className="h-[1px] flex-1 bg-slate-200"></div>
+                <span className="text-[9px] font-black text-slate-400 uppercase tracking-[3px]">Análisis Visual</span>
+                <div className="h-[1px] flex-1 bg-slate-200"></div>
+              </div>
+
+              {/* SECCIÓN DE GRÁFICOS */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-10">
+                
+                {/* 1. ÁREA: INGRESOS POR JORNADA */}
+                <div className="bg-white p-6 rounded-[35px] border border-slate-100 shadow-sm h-[320px] flex flex-col">
+                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Ingresos por Jornada</h3>
+                  <div className="flex-1">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={obtenerDatosVentasSemanales()}>
+                        <defs>
+                          <linearGradient id="colorIngreso" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3}/>
+                            <stop offset="95%" stopColor="#3B82F6" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 9, fontWeight: 'bold', fill: '#94A3B8'}} />
+                        <Tooltip contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.05)' }} />
+                        <Area type="monotone" dataKey="total" stroke="#3B82F6" strokeWidth={4} fillOpacity={1} fill="url(#colorIngreso)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* 2. PIE: TOP SERVICIOS */}
+                <div className="bg-white p-6 rounded-[35px] border border-slate-100 shadow-sm h-[320px] flex flex-col items-center">
+                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 w-full">Top Servicios</h3>
+                  <div className="flex-1 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie 
+                          data={datosServicios} 
+                          cx="50%" cy="50%" 
+                          innerRadius={60} outerRadius={85} 
+                          paddingAngle={5} dataKey="value"
+                          labelLine={false}
+                          label={(props: any) => {
+                            const { cx, cy, midAngle, innerRadius, outerRadius, porcentaje } = props;
+                            const RADIAN = Math.PI / 180;
+                            const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
+                            const x = cx + radius * Math.cos(-midAngle * RADIAN);
+                            const y = cy + radius * Math.sin(-midAngle * RADIAN);
+                            return (
+                              <text x={x} y={y} fill="white" className="text-[10px] font-black" textAnchor="middle" dominantBaseline="central">
+                                {`${porcentaje}%`}
+                              </text>
+                            );
+                          }}
+                        >
+                          {datosServicios.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={COLORS_DASHBOARD[index % COLORS_DASHBOARD.length]} stroke="none" />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(value, name, props: any) => [`${value} ventas (${props.payload.porcentaje}%)`, name]} contentStyle={{ borderRadius: '15px', border: 'none' }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* 3. BAR: COMPARATIVA DE ORIGEN (CORREGIDO md:col-span-1) */}
+<div className="bg-white p-6 rounded-[35px] border border-slate-100 shadow-sm h-[320px] flex flex-col md:col-span-1">
+  <div className="mb-4">
+    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Comparativa de Origen</h3>
+    <p className="text-[12px] font-black text-slate-800 uppercase italic">Ingresos por Categoría</p>
+  </div>
+
+  <div className="flex-1 w-full">
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={obtenerDatosVS()} margin={{ top: 20, right: 0, left: -35, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+        <XAxis 
+          dataKey="name" 
+          axisLine={false} 
+          tickLine={false} 
+          tick={{fontSize: 9, fontWeight: '900', fill: '#64748B'}} 
+        />
+        <YAxis hide={true} />
+        <Tooltip cursor={{fill: '#F8FAFC', radius: 15}} contentStyle={{ borderRadius: '20px', border: 'none' }} />
+        <Bar dataKey="total" radius={[10, 10, 10, 10]} barSize={30}>
+          {obtenerDatosVS().map((entry, index) => (
+            <Cell key={`cell-${index}`} fill={['#3B82F6', '#10B981', '#64748B'][index % 3]} />
+          ))}
+          <LabelList 
+            dataKey="total" 
+            content={(props: any) => {
+              const { x, y, width, value } = props;
+              return (
+                <text x={x + width / 2} y={y - 10} fill="#1E293B" className="text-[9px] font-black" textAnchor="middle">
+                  {`${Number(value).toLocaleString()}`}
+                </text>
+              );
+            }} 
+          />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  </div>
+</div>
+
+{/* 4. LINE: MONITOR ACUMULATIVO (CORREGIDO A ESTILO BLANCO) */}
+{/* CAMBIADO: h-[380px] -> h-[320px] para igualar al anterior */}
+<div className="bg-white p-6 rounded-[35px] border border-slate-100 shadow-sm h-[320px] flex flex-col md:col-span-1">
+  <div className="flex justify-between items-start mb-4">
+    <div>
+      <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Crecimiento Mensual</h3>
+      <p className="text-[14px] font-black text-slate-800 uppercase italic">Flujo Acumulado</p>
+    </div>
+    <div className="flex gap-4 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100">
+      <div className="flex items-center gap-1.5">
+        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+        <span className="text-[8px] text-slate-500 font-black uppercase">In</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <div className="w-1.5 h-1.5 rounded-full bg-rose-500"></div>
+        <span className="text-[8px] text-slate-500 font-black uppercase">Out</span>
+      </div>
+    </div>
+  </div>
+  <div className="flex-1 w-full">
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={datosLíneas} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+        <XAxis 
+          dataKey="dia" 
+          axisLine={false} 
+          tickLine={false} 
+          tick={{fontSize: 9, fontWeight: 'bold', fill: '#94A3B8'}} 
+          interval={4}
+        />
+        <YAxis hide={false} axisLine={false} tickLine={false} tick={{fontSize: 8, fill: '#94A3B8'}} />
+        <Tooltip 
+          contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.05)', fontSize: '10px' }}
+          itemStyle={{ fontWeight: 'bold' }}
+        />
+        <Line 
+          type="monotone" 
+          dataKey="ingresos" 
+          stroke="#10B981" 
+          strokeWidth={4} 
+          dot={false} 
+          activeDot={{ r: 6, strokeWidth: 0, fill: '#10B981' }} 
+        />
+        <Line 
+          type="monotone" 
+          dataKey="egresos" 
+          stroke="#F43F5E" 
+          strokeWidth={4} 
+          dot={false} 
+          activeDot={{ r: 6, strokeWidth: 0, fill: '#F43F5E' }} 
+        />
+      </LineChart>
+    </ResponsiveContainer>
+  </div>
+</div>
+
               </div>
             </>
           );
         })()}
-
-        <button className="w-full mt-6 h-16 bg-blue-600 rounded-[25px] font-black text-xs text-white uppercase tracking-[4px] shadow-lg shadow-blue-100 hover:bg-blue-700 active:scale-95 transition-all">
-          📥 Generar Informe PDF
-        </button>
       </div>
     </div>
   </div>
