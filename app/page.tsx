@@ -1,28 +1,27 @@
 'use client';
-import { useState, useEffect } from 'react';
-// 1. Importamos la conexión
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabase';
-// <<< AÑADE ESTO AQUÍ >>>
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, 
   ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, LabelList, LineChart, Line
 } from 'recharts';
 
+// 1. MOVER ESTO FUERA PARA EVITAR ERRORES DE RENDERIZADO
 const getBoliviaISO = () => {
   const ahora = new Date();
   const boliviaTime = ahora.toLocaleString("en-US", {
     timeZone: "America/La_Paz",
     hour12: false
   });
-  
   const d = new Date(boliviaTime);
-  // Definimos que 'n' puede ser string o number para que TS esté feliz
   const pad = (n: number | string) => n.toString().padStart(2, '0');
-  
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 };
 
+const COLORS_DASHBOARD = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
+
 export default function Home() {
+  
 // --- NAVEGACIÓN ---
 const [pestaña, setPestaña] = useState('inicio');
 const [accionInicio, setAccionInicio] = useState('menu');
@@ -85,39 +84,33 @@ const [totalGastosHoy, setTotalGastosHoy] = useState<number>(0);
 
 // --- ESTADOS PARA DASHBOARD ---
 const [mostrarDashboard, setMostrarDashboard] = useState(false);
-
-
 const obtenerDatosVentasSemanales = () => {
-    // 1. Crear el mapa con tipado para evitar el error anterior
     const ventasMap: { [key: string]: number } = {};
-    
-    // 2. Determinar cuántos días tiene EL MES ESPECÍFICO seleccionado
-    // mesFiltro + 1 porque en JS los meses van de 0 a 11, y el día 0 del mes siguiente es el último del actual.
     const diasEnMes = new Date(anioFiltro, mesFiltro + 1, 0).getDate();
 
-    // 3. Llenamos el mapa con EXACTAMENTE esa cantidad de días (ni uno más, ni uno menos)
     for (let i = 1; i <= diasEnMes; i++) {
         const diaLabel = String(i).padStart(2, '0');
         ventasMap[diaLabel] = 0;
     }
 
-    // 4. Filtrar y sumar las ventas
     const mesPad = String(mesFiltro + 1).padStart(2, '0');
     const patronFiltro = `${anioFiltro}-${mesPad}`;
     
+    // VALIDACIÓN CLAVE: Si listaVentas no existe, devolvemos el mapa vacío
+    if (!listaVentas || !Array.isArray(listaVentas)) {
+         return Object.entries(ventasMap).map(([name, total]) => ({ name, total }));
+    }
+
     listaVentas.forEach((v: any) => {
-        if (v.fecha && String(v.fecha).includes(patronFiltro)) {
-            // Extraemos el día real de la fecha de la venta
+        if (v && v.fecha && String(v.fecha).includes(patronFiltro)) {
             const diaV = new Date(v.fecha).getUTCDate(); 
             const diaLabel = String(diaV).padStart(2, '0');
-            
             if (ventasMap.hasOwnProperty(diaLabel)) {
                 ventasMap[diaLabel] += (Number(v.cuenta) || 0);
             }
         }
     });
 
-    // 5. Convertir a array ordenado para el gráfico
     return Object.entries(ventasMap)
         .map(([name, total]) => ({ name, total }))
         .sort((a, b) => Number(a.name) - Number(b.name));
@@ -147,34 +140,34 @@ const obtenerDatosServiciosPopulares = () => {
   return Object.entries(conteo).map(([name, value]) => ({
     name,
     value,
-    // Calculamos el porcentaje aquí para usarlo en el gráfico
     porcentaje: totalItemsMes > 0 ? ((value / totalItemsMes) * 100).toFixed(0) : 0
   })).sort((a, b) => b.value - a.value).slice(0, 5);
 };
+
 const COLORS_DASHBOARD = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
 
 const obtenerResumenFinanciero = () => {
     const mesPad = String(mesFiltro + 1).padStart(2, '0');
     const patronFiltro = `${anioFiltro}-${mesPad}`;
 
-    // Filtrado por texto (Evita errores de zona horaria)
-    const ventasDelMes = listaVentas.filter(v => 
-        v.fecha && String(v.fecha).includes(patronFiltro)
+    // Protección contra arrays nulos
+    const ventasDelMes = (listaVentas || []).filter(v => 
+        v && v.fecha && String(v.fecha).includes(patronFiltro)
     );
 
-    const gastosDelMes = listaGastos.filter(g => 
-        g.fecha && String(g.fecha).includes(patronFiltro)
+    const gastosDelMes = (listaGastos || []).filter(g => 
+        g && g.fecha && String(g.fecha).includes(patronFiltro)
     );
 
-    const ventasTotales = ventasDelMes.reduce((acc, v) => acc + (Number(v.pedido_total) || 0), 0);
-    const ingresosTotales = ventasDelMes.reduce((acc, v) => acc + (Number(v.cuenta) || 0), 0);
-    const saldosPendientes = ventasDelMes.reduce((acc, v) => acc + (Number(v.saldo) || 0), 0);
-    const egresosTotales = gastosDelMes.reduce((acc, g) => acc + (Number(g.monto) || 0), 0);
-    
-    return { ventasTotales, ingresosTotales, saldosPendientes, egresosTotales };
+    return {
+        ventasTotales: ventasDelMes.reduce((acc, v) => acc + (Number(v.pedido_total) || 0), 0),
+        ingresosTotales: ventasDelMes.reduce((acc, v) => acc + (Number(v.cuenta) || 0), 0),
+        saldosPendientes: ventasDelMes.reduce((acc, v) => acc + (Number(v.saldo) || 0), 0),
+        egresosTotales: gastosDelMes.reduce((acc, g) => acc + (Number(g.monto) || 0), 0)
+    };
 };
+
 const obtenerDatosVS = () => {
-  // Definimos el tipo del objeto para que acepte cualquier string como llave
   const conteo: { [key: string]: number } = {
     DECORADORA: 0,
     EMPRESA: 0,
@@ -184,18 +177,14 @@ const obtenerDatosVS = () => {
   const mesPad = String(mesFiltro + 1).padStart(2, '0');
   const patronFiltro = `${anioFiltro}-${mesPad}`;
 
-  // Filtramos las ventas del mes seleccionado
   const ventasDelMes = listaVentas.filter((v: any) => 
     v.fecha && String(v.fecha).includes(patronFiltro)
   );
 
   ventasDelMes.forEach((v: any) => {
-    // Buscamos el tipo de cliente con una limpieza de strings para mayor seguridad
     const clienteEncontrado = listaClientes.find(
       (c: any) => c.Nombre?.trim().toUpperCase() === v.nombre_cliente?.trim().toUpperCase()
     );
-    
-    // Forzamos el tipo a mayúsculas o asignamos REGULAR por defecto
     const tipo = (clienteEncontrado?.Tipo?.toUpperCase() || 'REGULAR') as string; 
     
     if (conteo.hasOwnProperty(tipo)) {
@@ -211,447 +200,416 @@ const obtenerDatosVS = () => {
   }));
 };
 // ==========================================
-  // --- FUNCIÓN PARA REFRESCAR TOTALES (NUEVO) ---
+  // --- CARGA Y REFRESCO DE DATOS ---
   // ==========================================
-const refrescarTotalesHoy = async () => {
-  // 1. Obtenemos solo la fecha (YYYY-MM-DD) de Bolivia
-  const fechaBolivia = getBoliviaISO().split('T')[0];
 
-  // Definimos el rango de tiempo: desde las 00:00:00 hasta las 23:59:59
-  const isoInicio = `${fechaBolivia}T00:00:00`;
-  const isoFin = `${fechaBolivia}T23:59:59`;
+  const refrescarTotalesHoy = async () => {
+    try {
+      const fechaBolivia = getBoliviaISO().split('T')[0];
+      const isoInicio = `${fechaBolivia}T00:00:00`;
+      const isoFin = `${fechaBolivia}T23:59:59`;
 
-  // 2. Consultar Gastos de hoy
-  const { data: dataGastos } = await supabase
-    .from('gastos')
-    .select('monto')
-    .gte('fecha', isoInicio)
-    .lte('fecha', isoFin);
-  
-  const sumaGastos = dataGastos?.reduce((acc, g) => acc + (Number(g.monto) || 0), 0) || 0;
-  setTotalGastosHoy(sumaGastos);
+      // Gastos de hoy
+      const { data: dataGastos } = await supabase
+        .from('gastos')
+        .select('monto')
+        .gte('fecha', isoInicio)
+        .lte('fecha', isoFin);
+      
+      const totalG = dataGastos?.reduce((acc, g) => acc + (Number(g.monto) || 0), 0) || 0;
+      setTotalGastosHoy(totalG);
 
-  // 3. Consultar Ingresos de hoy
-  const { data: dataVentas } = await supabase
-    .from('registro_ventas')
-    .select('cuenta, pedido_total, estado')
-    .gte('fecha', isoInicio)
-    .lte('fecha', isoFin);
+      // Ingresos de hoy (Cuentas/Acuenta de ventas hoy)
+      const { data: dataVentas } = await supabase
+        .from('registro_ventas')
+        .select('cuenta, pedido_total, estado')
+        .gte('fecha', isoInicio)
+        .lte('fecha', isoFin);
 
-  const sumaIngresos = dataVentas?.reduce((acc, v) => {
-    // Si el pedido es nuevo de hoy (Pendiente), sumamos el adelanto (cuenta)
-    // Si se marcó como entregado hoy, sumamos el total (porque se supone que ya cobraste todo)
-    return v.estado === 'Pendiente' ? acc + (Number(v.cuenta) || 0) : acc + (Number(v.pedido_total) || 0);
-  }, 0) || 0;
-
-  setTotalIngresosHoy(sumaIngresos);
-};
-  // ==========================================
-  // --- CARGAR DATOS AL INICIAR ---
-  // ==========================================
-  useEffect(() => {
-    async function descargarDatosIniciales() {
-      try {
-        // 1. Cargar Servicios
-        const { data: dataServ } = await supabase
-          .from('Servicios')
-          .select('Nombre')
-          .order('Nombre', { ascending: true });
-        if (dataServ) setListaServicios(dataServ.map(s => s.Nombre));
-
-        // 2. Cargar Clientes
-        const { data: dataClie } = await supabase
-          .from('Clientes')
-          .select('*')
-          .order('Nombre', { ascending: true });
-        if (dataClie) setListaClientes(dataClie);
-
-        // 3. Cargar Categorías de Gastos
-        const { data: dataCats } = await supabase
-          .from('categorias_gastos')
-          .select('*')
-          .order('nombre', { ascending: true });
-        if (dataCats) setMisCategorias(dataCats);
-
-        // 4. Cargar Totales y Ventas del mes (Para que el Dashboard funcione)
-        await refrescarTotalesHoy();
-        await cargarDatosVentas();
-        
-      } catch (error) {
-        console.error("Error en la carga inicial:", error);
-      }
+      const totalI = dataVentas?.reduce((acc, v) => {
+        // Si el estado es Pendiente, sumamos solo lo que dejó 'a cuenta' (columna cuenta)
+        // Si ya está Entregado/Finalizado, sumamos el total del pedido
+        return v.estado === 'Pendiente' 
+          ? acc + (Number(v.cuenta) || 0) 
+          : acc + (Number(v.pedido_total) || 0);
+      }, 0) || 0;
+      
+      setTotalIngresosHoy(totalI);
+    } catch (error) {
+      console.error("Error refrescando totales:", error);
     }
+  };
 
-    descargarDatosIniciales();
-  }, []);
-
-  // ==========================================
-  // --- FUNCIONES DE GASTOS (ACTUALIZADO) ---
-  // ==========================================
-
-  const guardarCategoriaBD = async () => {
-    if (nuevaCatNombre.trim() === "") return alert("Escribe el nombre de la categoría");
-    
+  const cargarDatosVentas = async () => {
+    const anioActual = new Date().getFullYear();
     const { data, error } = await supabase
-      .from('categorias_gastos')
-      .insert([{ 
-        nombre: nuevaCatNombre.toUpperCase(), 
-        icono: nuevaCatIcono // <-- Ahora usa el icono que esté en el estado
-      }])
-      .select();
-
-    if (!error && data) {
-      setMisCategorias([...misCategorias, data[0]]);
-      setNuevaCatNombre('');
-      setNuevaCatIcono('💸'); // Reiniciamos al icono por defecto
-      alert("Categoría guardada correctamente");
-    } else {
-      alert("Error: " + error?.message);
-    }
-  };
-
-  const eliminarCategoria = async (id: number) => {
-    if (confirm("¿Realmente deseas eliminar esta categoría? Los gastos ya registrados no se borrarán, pero no podrás elegirla de nuevo.")) {
-      const { error } = await supabase
-        .from('categorias_gastos')
-        .delete()
-        .eq('id', id);
-        
-      if (!error) {
-        setMisCategorias(misCategorias.filter(c => c.id !== id));
-      } else {
-        alert("No se pudo eliminar: " + error.message);
-      }
-    }
-  };
-
- const guardarGastoRealBD = async () => {
-  if (!gastoMonto || Number(gastoMonto) <= 0) return alert("Por favor, ingresa un monto válido");
-  if (!gastoCategoria) return alert("Debes seleccionar una categoría");
-
-  // USAMOS LA HORA FIJA DE BOLIVIA PARA EL REGISTRO
-  const fechaFija = getBoliviaISO();
-
-  const { error } = await supabase
-    .from('gastos')
-    .insert([{
-      categoria: gastoCategoria,
-      monto: Number(gastoMonto),
-      descripcion: gastoDetalle.toUpperCase().trim(),
-      fecha: fechaFija // <--- FECHA UNIFICADA
-    }]);
-
-  if (!error) {
-    // Refrescamos los círculos superiores inmediatamente
-    await refrescarTotalesHoy(); 
-    
-    alert("Gasto registrado correctamente 💸");
-    setGastoMonto('');
-    setGastoDetalle('');
-    setGastoCategoria('');
-    setAccionInicio('menu'); 
-  } else {
-    alert("Error al registrar el gasto: " + error.message);
-  }
-};
- // <<< LÓGICA ACTUALIZADA: VENTAS, GASTOS Y CLIENTES >>>
-
-const cargarDatosVentas = async () => {
-  // Traemos los datos de todo el año actual para que el dashboard funcione
-  const anioActual = new Date().getFullYear();
-  const fechaInicioAnio = `${anioActual}-01-01`;
-
-  const { data, error } = await supabase
-    .from('registro_ventas')
-    .select('*')
-    .gte('fecha', fechaInicioAnio) // Trae todo desde el 1 de enero
-    .order('fecha', { ascending: false });
-
-  if (data) setListaVentas(data);
-  if (error) console.error("Error cargando ventas:", error);
-};
-
-const cargarHistorialGastos = async () => {
-  // 1. Traemos los gastos ordenados por fecha
-  const { data, error } = await supabase
-    .from('gastos')
-    .select('*')
-    .order('fecha', { ascending: false });
-
-  if (error) {
-    console.error("Error en Supabase:", error.message);
-    return;
-  }
-
-  if (data) {
-    // 2. Limpiamos los datos de forma simple
-    // Quitamos la lógica de 'new Date()' aquí para evitar desfases de zona horaria
-    const datosLimpios = data.map(g => ({
-      ...g,
-      monto: Number(g.monto) || 0,
-      // Mantenemos la fecha como un String puro para filtrarlo luego por texto
-      fecha: g.fecha 
-    }));
-
-    console.log("Gastos cargados:", datosLimpios.length);
-    setListaGastos(datosLimpios);
-  }
-};
-// ==========================================
-// --- FUNCIONES DE CLIENTES ---
-// ==========================================
-const guardarClienteBD = async () => {
-  if (nombreClienteInput.trim() === "") return alert("El nombre es obligatorio");
-  const { data, error } = await supabase
-    .from('Clientes')
-    .insert([{ 
-      Nombre: nombreClienteInput.toUpperCase(), 
-      Telefono: telClienteInput,
-      Tipo: tipoClienteInput 
-    }])
-    .select();
-
-  if (!error) {
-    setListaClientes([...listaClientes, data[0]]);
-    setNombreClienteInput('');
-    setTelClienteInput('');
-    setTipoClienteInput('Regular');
-  } else {
-    alert("Error: " + error.message);
-  }
-};
-
-const eliminarCliente = async (id: number, nombre: string) => {
-  if (confirm(`¿Eliminar a ${nombre}?`)) {
-    const { error } = await supabase.from('Clientes').delete().eq('id', id);
-    if (!error) setListaClientes(listaClientes.filter(c => c.id !== id));
-  }
-};
-
-// ==========================================
-// --- FINALIZAR PEDIDO (CORREGIDO) ---
-// ==========================================
-const finalizarPedido = async () => {
-  if (trabajos.length === 0) return alert("Debes agregar al menos un trabajo");
-  if (!nombreClienteInput) return alert("El nombre del cliente es obligatorio");
-
-  try {
-    const idPedidoActual = Date.now(); 
-    // OBTENEMOS LA FECHA ACTUAL DE BOLIVIA
-    const fechaFijaBolivia = getBoliviaISO(); 
-
-    const nombreLimpio = nombreClienteInput.toUpperCase().trim();
-    const totalNuevoTrabajo = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
-    
-    const desglosePreciosNuevos = trabajos.map(t => ({
-      servicio: t.servicio.toUpperCase().trim(),
-      cantidad: Number(t.cant),
-      subtotal: Number(t.precio) 
-    }));
-
-    const resumenDetalleNuevo = trabajos.map(t => 
-      `${t.cant} ${t.servicio.toUpperCase()} (${t.ancho}x${t.alto})`
-    ).join(" // ");
-
-    // PASO A: INSERTAR EN TALLER
-    const filasParaTaller = trabajos.map(t => ({
-      id_pedido: idPedidoActual,
-      nombre_cliente: nombreLimpio,
-      servicio: t.servicio,
-      ancho: t.ancho,
-      alto: t.alto,
-      cantidad: Number(t.cant),
-      detalle: t.detalle || '',
-      estado: 'Pendiente',
-      fecha: fechaFijaBolivia // <--- SE AGREGA FECHA DE BOLIVIA
-    }));
-
-    const { error: errorTaller } = await supabase.from('pedidos_activos').insert(filasParaTaller);
-    if (errorTaller) throw errorTaller;
-
-    // PASO B: ACTUALIZAR O CREAR EN CAJA (REGISTRO_VENTAS)
-    const { data: pedidoExistente } = await supabase
       .from('registro_ventas')
       .select('*')
-      .eq('nombre_cliente', nombreLimpio)
-      .eq('estado', 'Pendiente')
-      .maybeSingle();
+      .gte('fecha', `${anioActual}-01-01`)
+      .order('fecha', { ascending: false });
+    if (data) setListaVentas(data);
+  };
 
-    if (pedidoExistente) {
-      // Si el cliente ya tiene una deuda pendiente, sumamos el nuevo pedido a la misma cuenta
-      const preciosPrevios = Array.isArray(pedidoExistente.detalle_precios) ? pedidoExistente.detalle_precios : [];
-      const nuevoDesgloseTotal = [...preciosPrevios, ...desglosePreciosNuevos];
-      
-      const nuevoTotalGlobal = (Number(pedidoExistente.pedido_total) || 0) + totalNuevoTrabajo;
-      const nuevaCuentaGlobal = (Number(pedidoExistente.cuenta) || 0) + (Number(montoAcuenta) || 0);
-      const nuevoSaldoGlobal = Math.max(0, nuevoTotalGlobal - nuevaCuentaGlobal);
-
-      const { error: errorUpdate } = await supabase
-        .from('registro_ventas')
-        .update({
-          detalle_servicio: pedidoExistente.detalle_servicio + " // " + resumenDetalleNuevo,
-          detalle_precios: nuevoDesgloseTotal, 
-          pedido_total: nuevoTotalGlobal,
-          cuenta: nuevaCuentaGlobal,
-          saldo: nuevoSaldoGlobal,
-          fecha: fechaFijaBolivia // <--- ACTUALIZAMOS LA FECHA AL DÍA DE HOY
-        })
-        .eq('id_pedido', pedidoExistente.id_pedido);
-        
-      if (errorUpdate) throw errorUpdate;
-    } else {
-      // Si es un cliente nuevo o sin deudas, creamos un registro nuevo
-      const totalVenta = totalNuevoTrabajo;
-      const cuentaVenta = Number(montoAcuenta) || 0;
-      const saldoVenta = totalVenta - cuentaVenta;
-
-      const { error: errorVenta } = await supabase
-        .from('registro_ventas')
-        .insert([{
-          id_pedido: idPedidoActual,
-          nombre_cliente: nombreLimpio,
-          telefono_cliente: telClienteInput,
-          detalle_servicio: resumenDetalleNuevo,
-          detalle_precios: desglosePreciosNuevos, 
-          pedido_total: totalVenta,
-          cuenta: cuentaVenta,
-          saldo: saldoVenta,
-          estado: 'Pendiente',
-          fecha: fechaFijaBolivia // <--- SE AGREGA FECHA DE BOLIVIA
-        }]);
-        
-      if (errorVenta) throw errorVenta;
+  const cargarHistorialGastos = async () => {
+    const { data, error } = await supabase
+      .from('gastos')
+      .select('*')
+      .order('fecha', { ascending: false });
+    if (data) {
+      setListaGastos(data.map(g => ({
+        ...g,
+        monto: Number(g.monto) || 0,
+        fecha: g.fecha
+      })));
     }
+  };
 
-    // --- ACTUALIZACIÓN MASIVA DE DATOS Y RESETEO (OPTIMIZADO) ---
-await Promise.all([
-  refrescarTotalesHoy(),
-  cargarDatosVentas(),
-  cargarHistorialGastos()
-]);
-    
-    alert("¡Pedido guardado correctamente! 🚀");
-    
-    // Limpiamos los campos para el siguiente cliente
-    setTrabajos([]);
-    setNombreClienteInput('');
-    setTelClienteInput('');
-    setMontoAcuenta(0);
-    setAccionInicio('menu');
-
-  } catch (err: any) {
-    console.error("Error al guardar:", err);
-    alert("Hubo un problema: " + err.message);
-  }
-}; // <--- AQUÍ CIERRA LA FUNCIÓN CORRECTAMENTE
-
-  // ==========================================
-  // --- CONTROL DE TALLER ---
-  // ==========================================
   const cargarPedidosTaller = async () => {
     const { data } = await supabase
       .from('pedidos_activos')
       .select('*')
-      .order('id', { ascending: true }); // Traemos todos para poder filtrar en las vistas
+      .order('id', { ascending: true });
     if (data) setListaPedidosTaller(data);
   };
+
+  useEffect(() => {
+    async function descargarDatosIniciales() {
+      try {
+        const { data: dataServ } = await supabase.from('Servicios').select('Nombre').order('Nombre', { ascending: true });
+        if (dataServ) setListaServicios(dataServ.map(s => s.Nombre));
+
+        const { data: dataClie } = await supabase.from('Clientes').select('*').order('Nombre', { ascending: true });
+        if (dataClie) setListaClientes(dataClie);
+
+        const { data: dataCats } = await supabase.from('categorias_gastos').select('*').order('nombre', { ascending: true });
+        if (dataCats) setMisCategorias(dataCats);
+
+        await refrescarTotalesHoy();
+        await cargarDatosVentas();
+      } catch (error) {
+        console.error("Error carga inicial:", error);
+      }
+    }
+    descargarDatosIniciales();
+  }, []);
+
+  useEffect(() => {
+    setPedidosSeleccionados([]);
+    if (pestaña === 'pedidos' || pestaña === 'taller' || pestaña === 'reportes' || mostrarDashboard === true) {
+      cargarPedidosTaller();
+      cargarDatosVentas();
+      cargarHistorialGastos();
+    }
+  }, [pestaña, mostrarDashboard]);
+
+  // ==========================================
+  // --- GESTIÓN DE GASTOS Y CATEGORÍAS ---
+  // ==========================================
+
+  const guardarCategoriaBD = async () => {
+    if (nuevaCatNombre.trim() === "") return alert("Escribe el nombre de la categoría");
+    const { data, error } = await supabase
+      .from('categorias_gastos')
+      .insert([{ 
+        nombre: nuevaCatNombre.toUpperCase(), 
+        icono: nuevaCatIcono 
+      }])
+      .select();
+    
+    if (!error && data) {
+      setMisCategorias([...misCategorias, data[0]]);
+      setNuevaCatNombre('');
+      setNuevaCatIcono('💸');
+      alert("Categoría guardada");
+    }
+  };
+
+  const eliminarCategoria = async (id: number) => {
+    if (confirm("¿Seguro que quieres eliminar esta categoría?")) {
+      const { error } = await supabase.from('categorias_gastos').delete().eq('id', id);
+      if (!error) setMisCategorias(misCategorias.filter(c => c.id !== id));
+    }
+  };
+
+  const guardarGastoRealBD = async () => {
+    if (!gastoMonto || Number(gastoMonto) <= 0) return alert("Monto inválido");
+    if (!gastoCategoria) return alert("Selecciona una categoría");
+
+    const { error } = await supabase.from('gastos').insert([{
+      categoria: gastoCategoria,
+      monto: Number(gastoMonto),
+      descripcion: gastoDetalle.toUpperCase().trim(),
+      fecha: getBoliviaISO()
+    }]);
+
+    if (!error) {
+      await refrescarTotalesHoy();
+      alert("Gasto registrado");
+      setGastoMonto('');
+      setGastoDetalle('');
+      setGastoCategoria('');
+      setAccionInicio('menu');
+    } else {
+      alert("Error al guardar: " + error.message);
+    }
+  };
+// ==========================================
+  // --- GESTIÓN DE CLIENTES ---
+  // ==========================================
+
+  const guardarClienteBD = async () => {
+    if (nombreClienteInput.trim() === "") return alert("El nombre es obligatorio");
+    const { data, error } = await supabase
+      .from('Clientes')
+      .insert([{ 
+        Nombre: nombreClienteInput.toUpperCase().trim(), 
+        Telefono: telClienteInput, 
+        Tipo: tipoClienteInput 
+      }])
+      .select();
+    
+    if (!error && data) {
+      setListaClientes([...listaClientes, data[0]]);
+      setNombreClienteInput('');
+      setTelClienteInput('');
+      setTipoClienteInput('Regular');
+      alert("Cliente guardado correctamente");
+    }
+  };
+
+  const eliminarCliente = async (id: number, nombre: string) => {
+    if (confirm(`¿Estás seguro de eliminar al cliente ${nombre}?`)) {
+      const { error } = await supabase.from('Clientes').delete().eq('id', id);
+      if (!error) setListaClientes(listaClientes.filter(c => c.id !== id));
+    }
+  };
+
+  // ==========================================
+  // --- LÓGICA DE PROCESAMIENTO DE PEDIDOS ---
+  // ==========================================
+
+  const finalizarPedido = async () => {
+    if (trabajos.length === 0) return alert("Debes agregar al menos un trabajo");
+    if (!nombreClienteInput) return alert("Nombre de cliente obligatorio");
+
+    try {
+      const idPedidoActual = Date.now();
+      const fechaFijaBolivia = getBoliviaISO();
+      const nombreLimpio = nombreClienteInput.toUpperCase().trim();
+      
+      // Calculamos el total de este nuevo pedido (suma de todos los trabajos en el carrito)
+      const totalNuevoTrabajo = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
+      
+      // Creamos el desglose detallado para la columna detalle_precios
+      const desglosePreciosNuevos = trabajos.map(t => ({
+        servicio: t.servicio.toUpperCase().trim(),
+        cantidad: Number(t.cant),
+        subtotal: Number(t.precio)
+      }));
+
+      // Creamos el resumen de texto para la columna detalle_servicio
+      const resumenDetalleNuevo = trabajos.map(t => 
+        `${t.cant} ${t.servicio.toUpperCase()} (${t.ancho}x${t.alto})`
+      ).join(" // ");
+
+      // 1. INSERTAR EN TALLER (pedidos_activos): Cada trabajo es una fila independiente
+      const { error: errorTaller } = await supabase.from('pedidos_activos').insert(
+        trabajos.map(t => ({
+          id_pedido: idPedidoActual,
+          nombre_cliente: nombreLimpio,
+          servicio: t.servicio,
+          ancho: t.ancho,
+          alto: t.alto,
+          cantidad: Number(t.cant),
+          detalle: t.detalle || '',
+          estado: 'Pendiente',
+          fecha: fechaFijaBolivia
+        }))
+      );
+      if (errorTaller) throw errorTaller;
+
+      // 2. GESTIÓN EN REGISTRO_VENTAS: Verificamos si el cliente tiene un pedido "Pendiente" abierto
+      const { data: pedidoExistente } = await supabase
+        .from('registro_ventas')
+        .select('*')
+        .eq('nombre_cliente', nombreLimpio)
+        .eq('estado', 'Pendiente')
+        .maybeSingle();
+
+      if (pedidoExistente) {
+        // ACTUALIZAR: Si ya existe un pedido pendiente, sumamos el nuevo trabajo al saldo actual
+        const nuevoTotalGlobal = (Number(pedidoExistente.pedido_total) || 0) + totalNuevoTrabajo;
+        const nuevaCuentaGlobal = (Number(pedidoExistente.cuenta) || 0) + (Number(montoAcuenta) || 0);
+        
+        const { error: errorUpdate } = await supabase
+          .from('registro_ventas')
+          .update({
+            detalle_servicio: pedidoExistente.detalle_servicio + " // " + resumenDetalleNuevo,
+            detalle_precios: [
+              ...(Array.isArray(pedidoExistente.detalle_precios) ? pedidoExistente.detalle_precios : []), 
+              ...desglosePreciosNuevos
+            ],
+            pedido_total: nuevoTotalGlobal,
+            cuenta: nuevaCuentaGlobal,
+            saldo: Math.max(0, nuevoTotalGlobal - nuevaCuentaGlobal),
+            fecha: fechaFijaBolivia // Actualizamos fecha a la última actividad
+          })
+          .eq('id_pedido', pedidoExistente.id_pedido);
+        
+        if (errorUpdate) throw errorUpdate;
+      } else {
+        // INSERTAR NUEVO: Si no hay pedido pendiente, creamos el registro desde cero
+        const { error: errorVenta } = await supabase.from('registro_ventas').insert([{
+          id_pedido: idPedidoActual,
+          nombre_cliente: nombreLimpio,
+          telefono_cliente: telClienteInput,
+          detalle_servicio: resumenDetalleNuevo,
+          detalle_precios: desglosePreciosNuevos,
+          pedido_total: totalNuevoTrabajo,
+          cuenta: Number(montoAcuenta) || 0, 
+          saldo: totalNuevoTrabajo - (Number(montoAcuenta) || 0),
+          estado: 'Pendiente',
+          fecha: fechaFijaBolivia
+        }]);
+        if (errorVenta) throw errorVenta;
+      }
+
+      // 3. FINALIZACIÓN Y LIMPIEZA
+      await Promise.all([refrescarTotalesHoy(), cargarDatosVentas()]);
+      alert("¡Pedido guardado y enviado a taller!");
+      
+      // Reset de estados
+      setTrabajos([]);
+      setNombreClienteInput('');
+      setTelClienteInput('');
+      setMontoAcuenta(0);
+      setAccionInicio('menu');
+      
+    } catch (err: any) {
+      alert("Error en proceso: " + err.message);
+    }
+  };
+// ==========================================
+  // --- LÓGICA DE TALLER Y ENTREGAS ---
+  // ==========================================
 
   const cambiarEstadoPedido = async (id: number, nuevoEstado: string) => {
     const { error } = await supabase
       .from('pedidos_activos')
       .update({ estado: nuevoEstado })
       .eq('id', id);
-    if (!error) cargarPedidosTaller(); 
+    if (!error) cargarPedidosTaller();
   };
-const entregarPedidoFinalv2 = async (nombreCliente: string) => {
-  try {
-    const nombreLimpio = nombreCliente.trim();
-    const fechaHoy = getBoliviaISO();
 
-    // 1. Buscamos la venta sin restringir el estado (puede ser Pendiente o Entregado)
-    const ventaActual = listaVentas.find(v => v.nombre_cliente?.trim() === nombreLimpio);
-    
-    if (!ventaActual) {
-      alert("No se encontró ningún registro para: " + nombreLimpio);
-      return;
-    }
+  const entregarPedidoFinalv2 = async (nombreCliente: string) => {
+    try {
+      const nombreLimpio = nombreCliente.trim();
+      const fechaHoy = getBoliviaISO();
+      
+      // Buscamos la venta pendiente del cliente
+      const ventaActual = listaVentas.find(v => v.nombre_cliente?.trim() === nombreLimpio && v.estado === 'Pendiente');
+      if (!ventaActual) return alert("No se encontró un registro pendiente para este cliente.");
 
-    const saldoActual = Number(ventaActual.saldo) || 0;
-    let pagoHoy = 0;
+      const saldoActual = Number(ventaActual.saldo) || 0;
+      let pagoHoy = 0;
 
-    // 2. Lógica inteligente de cobro
-    if (saldoActual > 0) {
-      // Si todavía debe, pedimos el pago
-      const montoIngresado = window.prompt(
-        `CLIENTE: ${nombreLimpio}\nSALDO PENDIENTE: ${saldoActual} Bs.\n\n¿Cuánto está pagando ahora?`, 
-        saldoActual.toString()
-      );
-      if (montoIngresado === null) return; 
-      pagoHoy = parseFloat(montoIngresado) || 0;
-    } else {
-      // SI YA ESTÁ PAGADO: Mostramos aviso informativo y seguimos al despacho
-      alert(`✅ El pedido de ${nombreLimpio} ya estaba pagado.\nProcediendo a registrar la salida física del taller...`);
-    }
+      // Si tiene saldo, preguntamos cuánto paga
+      if (saldoActual > 0) {
+        const monto = window.prompt(`CLIENTE: ${nombreLimpio}\nSALDO PENDIENTE: ${saldoActual} Bs.\n\n¿Cuánto cancela hoy?`, saldoActual.toString());
+        if (monto === null) return; // Canceló la operación
+        pagoHoy = parseFloat(monto) || 0;
+      }
 
-    // 3. ACTUALIZAR CAJA (Solo si hay un pago nuevo o si hay que cerrar un 'Pendiente')
-    if (pagoHoy > 0 || (ventaActual.estado === 'Pendiente' && saldoActual === 0)) {
-      const nuevoSaldo = Math.max(0, saldoActual - pagoHoy);
-      const nuevaCuenta = (Number(ventaActual.cuenta) || 0) + pagoHoy;
-
-      const { error: errVenta } = await supabase
+      // Actualizamos el saldo y el estado en registro_ventas
+      const nSaldo = Math.max(0, saldoActual - pagoHoy);
+      const { error: errorVenta } = await supabase
         .from('registro_ventas')
         .update({ 
-          cuenta: nuevaCuenta, 
-          saldo: nuevoSaldo,
-          estado: nuevoSaldo === 0 ? 'Entregado' : 'Pendiente',
+          cuenta: (Number(ventaActual.cuenta) || 0) + pagoHoy,
+          saldo: nSaldo,
+          estado: nSaldo === 0 ? 'Entregado' : 'Pendiente',
           fecha: fechaHoy 
         })
         .eq('id_pedido', ventaActual.id_pedido);
-        
-      if (errVenta) throw errVenta;
-    }
 
-    // 4. ARCHIVAR TRABAJOS EN TALLER (Esta es la parte del "Despacho")
-    if (pedidosSeleccionados.length > 0) {
-      const { error: errTaller } = await supabase
-        .from('pedidos_activos')
-        .update({ 
-            estado: 'Archivado',
+      if (errorVenta) throw errorVenta;
+
+      // Si seleccionó trabajos específicos en el taller, los archivamos
+      if (pedidosSeleccionados.length > 0) {
+        const { error: errorTaller } = await supabase
+          .from('pedidos_activos')
+          .update({ 
+            estado: 'Archivado', 
             fecha_entrega: fechaHoy 
-        })
-        .in('id', pedidosSeleccionados);
+          })
+          .in('id', pedidosSeleccionados);
+        
+        if (errorTaller) throw errorTaller;
+      }
 
-      if (errTaller) throw errTaller;
+      alert("🚀 Despacho realizado y saldos actualizados.");
+      setPedidosSeleccionados([]);
+      await Promise.all([cargarDatosVentas(), cargarPedidosTaller(), refrescarTotalesHoy()]);
+      
+    } catch (err: any) {
+      alert("Error en entrega: " + err.message);
     }
+  };
 
-    alert(`🚀 ¡Despacho finalizado con éxito!`);
-    
-    // Limpieza de estados y refresco de UI
-    setPedidosSeleccionados([]);
-    await cargarDatosVentas();
-    await cargarPedidosTaller();
-    await refrescarTotalesHoy();
+  // ==========================================
+  // --- GESTIÓN DE SERVICIOS ---
+  // ==========================================
 
-  } catch (err: any) { 
-    console.error(err);
-    alert("Error en el proceso: " + err.message); 
-  }
-};
+  const guardarServicioBD = async () => {
+    if (nuevoServicioInput.trim()) {
+      const nom = nuevoServicioInput.toUpperCase().trim();
+      const { error } = await supabase.from('Servicios').insert([{ Nombre: nom }]);
+      if (!error) {
+        setListaServicios([...listaServicios, nom]);
+        setNuevoServicioInput('');
+        alert("Servicio agregado");
+      }
+    }
+  };
+
+  const editarServicio = async (nombreAntiguo: string) => {
+    const nuevoNombre = prompt("Nuevo nombre para el servicio:", nombreAntiguo);
+    if (nuevoNombre && nuevoNombre.trim() !== "") {
+      const { error } = await supabase
+        .from('Servicios')
+        .update({ Nombre: nuevoNombre.toUpperCase().trim() })
+        .eq('Nombre', nombreAntiguo);
+      
+      if (!error) {
+        setListaServicios(listaServicios.map(s => s === nombreAntiguo ? nuevoNombre.toUpperCase().trim() : s));
+      }
+    }
+  };
+
+  const eliminarServicio = async (nombre: string) => {
+    if (confirm(`¿Eliminar el servicio "${nombre}"?`)) {
+      const { error } = await supabase.from('Servicios').delete().eq('Nombre', nombre);
+      if (!error) setListaServicios(listaServicios.filter(s => s !== nombre));
+    }
+  };
+
   // ==========================================
-  // --- SUBIDA A CLOUDINARY ---
+  // --- CLOUDINARY Y MANEJO DE IMÁGENES ---
   // ==========================================
+
   const subirACloudinary = async (file: File, pedidoId: number) => {
-    setSubiendo(true); 
+    setSubiendo(true);
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('upload_preset', 'fotos_pedidos'); 
+    formData.append('upload_preset', 'fotos_pedidos'); // Tu preset configurado
 
     try {
       const res = await fetch('https://api.cloudinary.com/v1_1/debs3gk6x/image/upload', {
         method: 'POST',
-        body: formData,
+        body: formData
       });
       const data = await res.json();
+      
       if (data.secure_url) {
         const { error } = await supabase
           .from('pedidos_activos')
@@ -659,24 +617,23 @@ const entregarPedidoFinalv2 = async (nombreCliente: string) => {
           .eq('id', pedidoId);
 
         if (!error) {
-          alert("¡Foto guardada! 📸");
+          alert("¡Foto guardada exitosamente!");
           setModalSubida({ abierto: false, pedidoId: null });
           setPrevisualizacion(null);
           setArchivoSeleccionado(null);
-          cargarPedidosTaller(); 
+          cargarPedidosTaller();
         }
       }
     } catch (err) {
-      alert("Error de conexión con Cloudinary");
+      alert("Error al subir imagen a Cloudinary");
     } finally {
-      setSubiendo(false); 
+      setSubiendo(false);
     }
   };
 
   const manejarPegadoEnModal = (e: any) => {
     if (!modalSubida.abierto) return;
-    const items = e.clipboardData?.items;
-    if (!items) return;
+    const items = (e.clipboardData || e.originalEvent.clipboardData).items;
     for (let i = 0; i < items.length; i++) {
       if (items[i].type.indexOf("image") !== -1) {
         const file = items[i].getAsFile();
@@ -684,47 +641,6 @@ const entregarPedidoFinalv2 = async (nombreCliente: string) => {
           setArchivoSeleccionado(file);
           setPrevisualizacion(URL.createObjectURL(file));
         }
-      }
-    }
-  };
-
-  // <<< EFECTO DE CARGA SEGÚN PESTAÑA >>>
-// <<< EFECTO DE CARGA SEGÚN PESTAÑA Y DASHBOARD >>>
-useEffect(() => {
-  setPedidosSeleccionados([]); 
-
-  // Si entras a reportes, taller O SI EL DASHBOARD SE ABRE, cargamos gastos
-  if (pestaña === 'pedidos' || pestaña === 'taller' || pestaña === 'reportes' || mostrarDashboard === true) {
-    cargarPedidosTaller();
-    cargarDatosVentas();
-    cargarHistorialGastos(); // <--- Esto es lo que llena la memoria de egresos
-  }
-}, [pestaña, mostrarDashboard]); // <--- Agregamos mostrarDashboard aquí
-
-  // --- FUNCIONES DE SERVICIOS ---
-  const eliminarServicio = async (nombreEliminar: string) => {
-    if (confirm(`¿Eliminar "${nombreEliminar}"?`)) {
-      const { error } = await supabase.from('Servicios').delete().eq('Nombre', nombreEliminar);
-      if (!error) setListaServicios(listaServicios.filter(s => s !== nombreEliminar));
-    }
-  };
-
-  const editarServicio = async (nombreActual: string) => {
-    const nuevoNombre = prompt("Editar nombre:", nombreActual);
-    if (nuevoNombre?.trim()) {
-      const nombreMayus = nuevoNombre.toUpperCase();
-      const { error } = await supabase.from('Servicios').update({ Nombre: nombreMayus }).eq('Nombre', nombreActual);
-      if (!error) setListaServicios(listaServicios.map(s => s === nombreActual ? nombreMayus : s));
-    }
-  };
-
-  const guardarServicioBD = async () => {
-    if (nuevoServicioInput.trim()) {
-      const nombreMayus = nuevoServicioInput.toUpperCase();
-      const { error } = await supabase.from('Servicios').insert([{ Nombre: nombreMayus }]);
-      if (!error) {
-        setListaServicios([...listaServicios, nombreMayus]);
-        setNuevoServicioInput('');
       }
     }
   };
@@ -1482,179 +1398,177 @@ useEffect(() => {
         </div>
       </section>
     )}
-    {/* ========================================== */}
-{/* --- PESTAÑA DESPACHO (ENTREGAS Y COBROS) --- */}
+{/* ========================================== */}
+{/* --- PESTAÑA DESPACHO (DATOS DE TABLA) --- */}
 {/* ========================================== */}
 {pestaña === 'reportes' && (
-  <section className="animate-in fade-in duration-500 p-4 pb-32 bg-[#F8FAFC] min-h-screen">
-    <div className="mb-6">
-      <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic">Paquetes Listos</h2>
-      <div className="flex items-center gap-2 mt-1">
-        <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></span>
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Control de Salida y Saldos</p>
-      </div>
-    </div>
+  <section className="animate-in fade-in duration-500 p-4 pb-32 bg-[#F1F5F9] min-h-screen">
+    {/* ... Encabezado ... */}
 
-    <div className="space-y-4">
-      {Object.values(
-        listaPedidosTaller
-          .filter(p => p.estado === 'Finalizado')
-          .reduce((acc: any, pedido: any) => {
-            if (!acc[pedido.nombre_cliente]) {
-              const ventaOriginal = listaVentas.find(v => v.nombre_cliente === pedido.nombre_cliente);
-              acc[pedido.nombre_cliente] = { 
-                nombre: pedido.nombre_cliente,
-                trabajosTaller: [], 
-                totalVenta: ventaOriginal?.pedido_total || 0,
-                adelanto: ventaOriginal?.cuenta || 0,
-                saldo: ventaOriginal?.saldo || 0,
-                desglosePrecios: ventaOriginal?.detalle_precios || []
-              };
-            }
-            acc[pedido.nombre_cliente].trabajosTaller.push(pedido);
-            return acc;
-          }, {})
-      ).map((grupo: any, idx: number) => {
-        const saldoPendiente = grupo.saldo;
-        const estaPagado = saldoPendiente <= 0;
+    <div className="space-y-3">
+  {Object.values(
+    listaVentas.reduce((acc: any, v: any) => {
+      // Filtramos por estado de la venta en la tabla
+      if (v.estado === 'Pendiente') {
+        const nombre = v.nombre_cliente?.toUpperCase().trim() || "S/N";
+        
+        // Buscamos fotos en taller que estén listas
+        const fotosListas = listaPedidosTaller.filter(p => 
+          p.nombre_cliente?.toUpperCase().trim() === nombre && 
+          p.estado === 'Finalizado'
+        );
 
-        // Contamos cuántos de este grupo específico están seleccionados
-        const idsDelGrupo = grupo.trabajosTaller.map((t: any) => t.id);
-        const seleccionadosDeEsteGrupo = pedidosSeleccionados.filter(id => idsDelGrupo.includes(id)).length;
+        if (!acc[nombre]) {
+          acc[nombre] = { 
+            nombre, 
+            total_tabla: 0, 
+            acuenta_tabla: 0, 
+            saldo_tabla: 0, 
+            trabajos: [] 
+          };
+        }
 
-        return (
-          <div key={idx} className="bg-white rounded-[35px] shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden mb-6">
-            
-            {/* CABECERA: CLIENTE Y FOTOS */}
-            <div className="p-5 bg-white">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <h3 className="text-xl font-black text-slate-800 uppercase leading-none">{grupo.nombre}</h3>
-                  <p className="text-[10px] font-bold text-blue-500 mt-2 uppercase tracking-widest">Contenido del Paquete:</p>
-                </div>
-                <div className="bg-slate-100 px-3 py-1 rounded-full text-[10px] font-black text-slate-500 uppercase">
-                  {grupo.trabajosTaller.length} piezas
-                </div>
-              </div>
+        // LEEMOS DIRECTO DE LA TABLA registro_ventas
+        acc[nombre].total_tabla += (Number(v.pedido_total) || 0);
+        acc[nombre].acuenta_tabla += (Number(v.cuenta) || 0);
+        acc[nombre].saldo_tabla += (Number(v.saldo) || 0);
+        
+        // Mapeamos los trabajos para mostrar precio unitario si existe en el detalle_precios
+        let poolPrecios: any[] = [];
+        try {
+          poolPrecios = typeof v.detalle_precios === 'string' ? JSON.parse(v.detalle_precios) : (v.detalle_precios || []);
+        } catch (e) { poolPrecios = []; }
 
-              {/* TIRA DE IMÁGENES */}
-              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                {grupo.trabajosTaller.map((t: any) => (
-                  <div key={t.id} className={`relative flex-shrink-0 w-20 h-20 rounded-2xl border-2 overflow-hidden transition-all ${pedidosSeleccionados.includes(t.id) ? 'border-blue-600 scale-95' : 'border-slate-200 opacity-60'}`}>
-                    {t.url_foto ? (
-                      <img src={t.url_foto} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-[20px] bg-slate-50">🖼️</div>
-                    )}
-                    <div className="absolute bottom-0 right-0 bg-black/60 text-white text-[8px] px-1 font-bold">
-                      {t.ancho}x{t.alto}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+        const trabajosConInfo = fotosListas.map(t => {
+          const info = poolPrecios.find((item: any) => t.servicio?.toUpperCase().includes(item.servicio?.toUpperCase()));
+          return {
+            ...t,
+            p_unit: info ? (Number(info.subtotal) / (Number(info.cantidad) || 1)) : 0,
+            sub: info ? info.subtotal : 0,
+            cant_v: info ? info.cantidad : t.cantidad
+          };
+        });
 
-            {/* --- SECCIÓN COSTO DETALLADO CON PRECIOS REALES --- */}
-<div className="px-4 py-3 bg-slate-50 space-y-2 border-t border-slate-100">
-  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Items en este paquete:</p>
-  
-  {grupo.trabajosTaller.map((trabajo: any) => {
-    const isSelected = pedidosSeleccionados.includes(trabajo.id);
+        acc[nombre].trabajos = [...acc[nombre].trabajos, ...trabajosConInfo];
+      }
+      return acc;
+    }, {})
+  ).map((grupo: any, idx: number) => {
+    const estaAbierto = clienteAbierto === grupo.nombre;
     
-    // BUSCAMOS EL PRECIO: 
-    // Si 'trabajo.precio_total' es 0, buscamos en el desglose de la venta por nombre de servicio
-    const precioReferencia = trabajo.precio_total > 0 
-      ? trabajo.precio_total 
-      : grupo.desglosePrecios.find((d: any) => d.servicio === trabajo.servicio)?.subtotal || 0;
+    // Si ya no debe nada y no hay fotos, ocultamos
+    if (grupo.saldo_tabla <= 0 && grupo.trabajos.length === 0) return null;
 
     return (
-      <div 
-        key={trabajo.id} 
-        onClick={() => {
-          if (isSelected) setPedidosSeleccionados(prev => prev.filter(id => id !== trabajo.id));
-          else setPedidosSeleccionados(prev => [...prev, trabajo.id]);
-        }}
-        className={`flex items-center justify-between p-3 rounded-2xl border transition-all cursor-pointer ${
-          isSelected ? 'bg-white border-blue-500 shadow-sm scale-[1.02]' : 'bg-transparent border-slate-200 opacity-70'
-        }`}
-      >
-        <div className="flex items-center gap-3">
-          {/* EL CHECKBOX VISIBLE */}
-          <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${
-            isSelected ? 'bg-blue-600 border-blue-600' : 'bg-white border-slate-300'
-          }`}>
-            {isSelected && <span className="text-white text-[10px] font-bold">✓</span>}
+      <div key={idx} className="bg-white rounded-[24px] shadow-sm border border-slate-200 overflow-hidden mb-3">
+        {/* CABECERA: DATOS REALES DE BASE DE DATOS */}
+        <div 
+          onClick={() => setClienteAbierto(estaAbierto ? null : grupo.nombre)}
+          className="p-4 flex justify-between items-center bg-white cursor-pointer"
+        >
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm ${grupo.saldo_tabla > 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+              {grupo.nombre.charAt(0)}
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-slate-700 uppercase">{grupo.nombre}</h3>
+              <div className="flex gap-2 mt-1">
+                <span className="text-[9px] font-bold text-slate-400 uppercase">Total: {grupo.total_tabla}</span>
+                <span className="text-[9px] font-bold text-blue-500 uppercase">Acuenta: {grupo.acuenta_tabla}</span>
+                <span className="text-[9px] font-bold text-red-500 uppercase italic">Saldo: {grupo.saldo_tabla} Bs.</span>
+              </div>
+            </div>
           </div>
-          
-          <div>
-            <span className={`text-[11px] font-black uppercase block ${isSelected ? 'text-blue-600' : 'text-slate-600'}`}>
-              {trabajo.servicio}
-            </span>
-            <span className="text-[9px] text-slate-400 font-bold uppercase">
-              {trabajo.ancho}x{trabajo.alto}m • Cant: {trabajo.cantidad}
-            </span>
-          </div>
+          <span className={`text-slate-300 transition-transform ${estaAbierto ? 'rotate-180' : ''}`}>▼</span>
         </div>
 
-        <div className="text-right">
-          <span className={`font-black text-[12px] ${isSelected ? 'text-slate-900' : 'text-slate-400'}`}>
-            {precioReferencia} Bs.
-          </span>
-        </div>
+        {estaAbierto && (
+          <div className="p-4 border-t border-slate-50 bg-slate-50/30">
+            <div className="flex gap-4 overflow-x-auto pb-6 scrollbar-hide">
+              {grupo.trabajos.length > 0 ? (
+                grupo.trabajos.map((t: any) => (
+                  <div key={t.id} className="relative flex-shrink-0 w-48 h-64 perspective">
+                    <div tabIndex={0} className="relative w-full h-full transition-transform duration-700 transform-style-3d group focus:rotate-y-180 active:rotate-y-180 cursor-pointer">
+                      
+                      {/* CARA A: VISTA PREVIA */}
+                      <div className="absolute inset-0 backface-hidden rounded-3xl overflow-hidden border-2 border-white shadow-sm bg-slate-200">
+                        {t.url_foto ? (
+                          <img src={t.url_foto} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase">Sin Diseño</div>
+                        )}
+                        <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 p-4">
+                          <p className="text-[10px] font-black text-white uppercase truncate">{t.servicio}</p>
+                          <p className="text-[8px] text-blue-400 font-bold uppercase tracking-tighter">Estado: {t.estado}</p>
+                        </div>
+                      </div>
+
+                      {/* CARA B: DETALLE DE ESE ITEM */}
+                      <div className="absolute inset-0 backface-hidden rounded-3xl bg-slate-900 text-white p-5 rotate-y-180 flex flex-col">
+                        <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest mb-4">Info Servicio</p>
+                        <div className="flex-1 space-y-2">
+                          <div className="flex justify-between border-b border-slate-800 pb-1">
+                            <span className="text-[9px] text-slate-400 uppercase font-bold">P. Unit</span>
+                            <span className="text-[9px] font-black">{Number(t.p_unit).toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between border-b border-slate-800 pb-1">
+                            <span className="text-[9px] text-slate-400 uppercase font-bold">Cant.</span>
+                            <span className="text-[9px] font-black">{t.cant_v}</span>
+                          </div>
+                          <div className="flex justify-between border-b border-slate-800 pb-1">
+                            <span className="text-[9px] text-emerald-400 uppercase font-bold">Subtotal</span>
+                            <span className="text-[9px] font-black text-emerald-400">{t.sub} Bs.</span>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); t.url_foto && window.open(t.url_foto, '_blank'); }}
+                          className="mt-4 w-full bg-slate-800 border border-slate-700 py-2 rounded-xl text-[9px] font-black uppercase"
+                        >
+                          Ver Imagen 🔍
+                        </button>
+                      </div>
+
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="w-full py-10 text-center">
+                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Esperando terminados en taller...</p>
+                </div>
+              )}
+            </div>
+
+            {/* ACCIÓN FINAL BASADA EN SALDO DE TABLA */}
+            <div className="mt-2 pt-4 border-t border-slate-200">
+               <button 
+                onClick={() => entregarPedidoFinalv2(grupo.nombre)}
+                className="w-full h-14 bg-red-600 text-white rounded-[22px] font-black text-[11px] uppercase tracking-[2px] shadow-xl active:scale-95 transition-transform"
+               >
+                💰 Cobrar {grupo.saldo_tabla} Bs y Finalizar
+               </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   })}
 </div>
+    {/* CSS ACTUALIZADO CON SOPORTE PARA CLASE 'HOVER' EN PC Y 'FOCUS' EN MÓVIL */}
+    <style dangerouslySetInnerHTML={{ __html: `
+      .perspective { perspective: 1000px; }
+      .transform-style-3d { transform-style: preserve-3d; }
+      .backface-hidden { backface-visibility: hidden; }
+      .rotate-y-180 { transform: rotateY(180deg); }
 
-            {/* RESUMEN FINANCIERO */}
-            <div className="p-5 bg-white border-t border-slate-50">
-              <div className="grid grid-cols-3 gap-2 mb-4 text-center">
-                <div className="bg-slate-50 p-2 rounded-2xl">
-                  <p className="text-[8px] font-bold text-slate-400 uppercase">Total</p>
-                  <p className="text-xs font-black text-slate-800">{grupo.totalVenta} Bs.</p>
-                </div>
-                <div className="bg-blue-50 p-2 rounded-2xl">
-                  <p className="text-[8px] font-bold text-blue-400 uppercase">Adelanto</p>
-                  <p className="text-xs font-black text-blue-600">{grupo.adelanto} Bs.</p>
-                </div>
-                <div className={`p-2 rounded-2xl border ${estaPagado ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
-                  <p className={`text-[8px] font-bold uppercase ${estaPagado ? 'text-emerald-400' : 'text-red-400'}`}>Saldo</p>
-                  <p className={`text-xs font-black ${estaPagado ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {estaPagado ? 'PAGADO' : `${saldoPendiente} Bs.`}
-                  </p>
-                </div>
-              </div>
-
-              {/* ACCIÓN FINAL DINÁMICA */}
-              <button 
-                disabled={seleccionadosDeEsteGrupo === 0}
-                onClick={() => entregarPedidoFinalv2(grupo.nombre)}
-                className={`w-full h-14 rounded-[22px] font-black text-[11px] uppercase tracking-widest transition-all ${
-                  seleccionadosDeEsteGrupo === 0
-                  ? 'bg-slate-100 text-slate-300 cursor-not-allowed'
-                  : estaPagado 
-                    ? 'bg-slate-900 text-white shadow-lg' 
-                    : 'bg-red-600 text-white shadow-lg animate-pulse'
-                }`}
-              >
-                {seleccionadosDeEsteGrupo === 0 
-                  ? 'Selecciona items arriba' 
-                  : estaPagado 
-                    ? `📦 Entregar ${seleccionadosDeEsteGrupo} Piezas` 
-                    : `💰 Cobrar ${saldoPendiente} Bs y Entregar`}
-              </button>
-            </div>
-          </div>
-        );
-      })}
-
-      {/* Mensaje de vacío */}
-      {listaPedidosTaller.filter(p => p.estado === 'Finalizado').length === 0 && (
-        <div className="py-24 text-center">
-          <p className="text-slate-300 font-black uppercase tracking-[5px] text-xs">Nada pendiente</p>
-        </div>
-      )}
-    </div>
+      /* En PC: Gira al pasar el mouse */
+      .group:hover { transform: rotateY(180deg); }
+      
+      /* En Móvil: Gira al tocar (hacer foco) */
+      .group:focus { transform: rotateY(180deg); }
+      
+      /* Opcional: Para que se mantenga un momento al tocar */
+      .group:active { transform: rotateY(180deg); }
+    `}} />
   </section>
 )}
       {/* NAVEGACIÓN INFERIOR */}
