@@ -400,7 +400,7 @@ const obtenerDatosVS = () => {
       // Calculamos el total de este nuevo pedido (suma de todos los trabajos en el carrito)
       const totalNuevoTrabajo = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
       
-      // Creamos el desglose detallado para la columna detalle_precios
+      // Creamos el desglose detallado para la columna detalle_precios (MANTIENE TU JSON)
       const desglosePreciosNuevos = trabajos.map(t => ({
         servicio: t.servicio.toUpperCase().trim(),
         cantidad: Number(t.cant),
@@ -412,7 +412,7 @@ const obtenerDatosVS = () => {
         `${t.cant} ${t.servicio.toUpperCase()} (${t.ancho}x${t.alto})`
       ).join(" // ");
 
-      // 1. INSERTAR EN TALLER (pedidos_activos): Cada trabajo es una fila independiente
+      // 1. INSERTAR EN TALLER (pedidos_activos): Incluimos la nueva columna precio_unitario
       const { error: errorTaller } = await supabase.from('pedidos_activos').insert(
         trabajos.map(t => ({
           id_pedido: idPedidoActual,
@@ -422,6 +422,8 @@ const obtenerDatosVS = () => {
           alto: t.alto,
           cantidad: Number(t.cant),
           detalle: t.detalle || '',
+          // --- AQUÍ GUARDAMOS EL PRECIO UNITARIO PARA TUS TARJETAS ---
+          precio_unitario: Number(t.precio), 
           estado: 'Pendiente',
           fecha: fechaFijaBolivia
         }))
@@ -644,6 +646,46 @@ const obtenerDatosVS = () => {
       }
     }
   };
+  // --- [NUEVA FUNCIÓN] ENTREGA PARA CLIENTES SIN SALDO (COMO MARCOS) ---
+  const entregarSoloTrabajos = async (nombreCliente: string) => {
+    try {
+      const nombreLimpio = nombreCliente.trim();
+      const fechaHoy = getBoliviaISO();
+
+      // Filtramos los trabajos que están en 'Finalizado' para archivarlos
+      const trabajosAEntregar = listaPedidosTaller.filter(p => 
+        p.nombre_cliente?.toUpperCase().trim() === nombreLimpio.toUpperCase().trim() && 
+        p.estado === 'Finalizado'
+      );
+
+      if (trabajosAEntregar.length === 0) {
+        alert("No hay trabajos listos para entregar de este cliente.");
+        return;
+      }
+
+      // Actualizamos a 'Archivado' en la base de datos
+      for (const trabajo of trabajosAEntregar) {
+        const { error } = await supabase
+          .from('pedidos_activos') // IMPORTANTE: Usamos tu tabla 'pedidos_activos'
+          .update({ 
+            estado: 'Archivado',
+            fecha_entrega: fechaHoy 
+          })
+          .eq('id', trabajo.id);
+
+        if (error) throw error;
+      }
+
+      alert("✅ ¡Entrega confirmada! Los trabajos se han entregado y archivado.");
+      
+      // Refrescamos los datos para que desaparezca de la lista
+      await Promise.all([cargarPedidosTaller(), cargarDatosVentas()]);
+
+    } catch (error) {
+      console.error("Error al entregar:", error);
+      alert("❌ Hubo un error al procesar la entrega.");
+    }
+  };
  return (
     <main className="min-h-screen bg-gray-100 font-sans pb-24 text-slate-900">
 
@@ -846,29 +888,77 @@ const obtenerDatosVS = () => {
             )}
 
             {/* VISTA: CONFIGURAR COSTOS */}
-            {accionInicio === 'config-costos' && (
-              <div className="bg-white p-6 rounded-3xl shadow-xl animate-in slide-in-from-bottom">
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-lg font-black uppercase italic text-red-600">Precios de Producción</h2>
-                  <button onClick={() => setAccionInicio('menu')} className="bg-gray-100 p-2 rounded-full font-bold">✕</button>
-                </div>
-                <div className="space-y-3 mb-6">
-                  <input placeholder="Material o Insumo" className="w-full p-3 bg-gray-50 rounded-xl font-bold text-sm border outline-none" value={nuevoCostoInput.item} onChange={(e) => setNuevoCostoInput({ ...nuevoCostoInput, item: e.target.value })} />
-                  <div className="flex gap-2">
-                    <input type="number" placeholder="Costo Bs." className="flex-1 p-3 bg-gray-50 rounded-xl font-bold text-sm border outline-none" value={nuevoCostoInput.precio} onChange={(e) => setNuevoCostoInput({ ...nuevoCostoInput, precio: e.target.value })} />
-                    <button onClick={() => { setCostosProduccion([...costosProduccion, { item: nuevoCostoInput.item, precio: nuevoCostoInput.precio }]); setNuevoCostoInput({ item: '', precio: '' }); }} className="bg-red-500 text-white px-5 rounded-xl font-bold italic">OK</button>
-                  </div>
-                </div>
-                <div className="space-y-2 italic">
-                  {costosProduccion.map((c, i) => (
-                    <div key={i} className="flex justify-between p-3 bg-red-50 rounded-xl text-xs font-bold border border-red-100">
-                      <span>{c.item}</span>
-                      <span className="text-red-600">{c.precio} Bs.</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+{accionInicio === 'config-costos' && (
+  <div className="bg-white p-6 rounded-3xl shadow-xl animate-in slide-in-from-bottom">
+    <div className="flex justify-between items-center mb-6">
+      <h2 className="text-lg font-black uppercase italic text-red-600">Precios de Producción</h2>
+      <button onClick={() => setAccionInicio('menu')} className="bg-gray-100 p-2 rounded-full font-bold">✕</button>
+    </div>
+
+    {/* Formulario para añadir */}
+    <div className="space-y-3 mb-6">
+      <input 
+        placeholder="Material o Insumo" 
+        className="w-full p-3 bg-gray-50 rounded-xl font-bold text-sm border outline-none" 
+        value={nuevoCostoInput.item} 
+        onChange={(e) => setNuevoCostoInput({ ...nuevoCostoInput, item: e.target.value })} 
+      />
+      <div className="flex gap-2">
+        <input 
+          type="number" 
+          placeholder="Costo Bs." 
+          className="flex-1 p-3 bg-gray-50 rounded-xl font-bold text-sm border outline-none" 
+          value={nuevoCostoInput.precio} 
+          onChange={(e) => setNuevoCostoInput({ ...nuevoCostoInput, precio: e.target.value })} 
+        />
+        <button 
+          onClick={() => {
+            if (!nuevoCostoInput.item || !nuevoCostoInput.precio) return;
+            // CORRECCIÓN: Convertimos el precio a Number para evitar el error 2322
+            setCostosProduccion([
+              ...costosProduccion, 
+              { 
+                item: nuevoCostoInput.item, 
+                precio: Number(nuevoCostoInput.precio) 
+              }
+            ]);
+            setNuevoCostoInput({ item: '', precio: '' });
+          }} 
+          className="bg-red-500 text-white px-5 rounded-xl font-bold italic active:scale-95 transition-transform"
+        >
+          OK
+        </button>
+      </div>
+    </div>
+
+    {/* Lista de costos con opción de eliminar */}
+    <div className="space-y-2 italic max-h-60 overflow-y-auto pr-1">
+      {costosProduccion.map((c, i) => (
+        <div key={i} className="flex justify-between items-center p-3 bg-red-50 rounded-xl text-xs font-bold border border-red-100">
+          <div className="flex flex-col">
+            <span className="text-slate-700 uppercase">{c.item}</span>
+            <span className="text-red-600">{c.precio} Bs.</span>
+          </div>
+          
+          {/* Botón para eliminar el item si te equivocas */}
+          <button 
+            onClick={() => {
+              const nuevaLista = costosProduccion.filter((_, index) => index !== i);
+              setCostosProduccion(nuevaLista);
+            }}
+            className="text-red-300 hover:text-red-600 p-2 transition-colors"
+          >
+            🗑️
+          </button>
+        </div>
+      ))}
+      
+      {costosProduccion.length === 0 && (
+        <p className="text-center text-gray-400 text-[10px] py-4">No hay costos configurados</p>
+      )}
+    </div>
+  </div>
+)}
 
             {/* VISTA: REGISTRO DE CLIENTES ACTUALIZADO */}
             {accionInicio === 'nuevo-cliente' && (
@@ -1399,175 +1489,157 @@ const obtenerDatosVS = () => {
       </section>
     )}
 {/* ========================================== */}
-{/* --- PESTAÑA DESPACHO (DATOS DE TABLA) --- */}
+{/* --- PESTAÑA DESPACHO (REPORTES) --- */}
 {/* ========================================== */}
 {pestaña === 'reportes' && (
   <section className="animate-in fade-in duration-500 p-4 pb-32 bg-[#F1F5F9] min-h-screen">
-    {/* ... Encabezado ... */}
-
     <div className="space-y-3">
-  {Object.values(
-    listaVentas.reduce((acc: any, v: any) => {
-      // Filtramos por estado de la venta en la tabla
-      if (v.estado === 'Pendiente') {
-        const nombre = v.nombre_cliente?.toUpperCase().trim() || "S/N";
-        
-        // Buscamos fotos en taller que estén listas
-        const fotosListas = listaPedidosTaller.filter(p => 
-          p.nombre_cliente?.toUpperCase().trim() === nombre && 
-          p.estado === 'Finalizado'
-        );
+      {Object.values(
+        listaVentas.reduce((acc: any, v: any) => {
+          const nombre = v.nombre_cliente?.toUpperCase().trim() || "S/N";
+          
+          // Solo mostramos lo que NO está archivado
+          const todosLosDelClienteActual = listaPedidosTaller.filter(p => 
+            p.nombre_cliente?.toUpperCase().trim() === nombre &&
+            p.estado !== 'Archivado'
+          );
 
-        if (!acc[nombre]) {
-          acc[nombre] = { 
-            nombre, 
-            total_tabla: 0, 
-            acuenta_tabla: 0, 
-            saldo_tabla: 0, 
-            trabajos: [] 
-          };
-        }
+          const fotosListas = todosLosDelClienteActual.filter(p => p.estado === 'Finalizado');
+          if (fotosListas.length === 0) return acc;
 
-        // LEEMOS DIRECTO DE LA TABLA registro_ventas
-        acc[nombre].total_tabla += (Number(v.pedido_total) || 0);
-        acc[nombre].acuenta_tabla += (Number(v.cuenta) || 0);
-        acc[nombre].saldo_tabla += (Number(v.saldo) || 0);
-        
-        // Mapeamos los trabajos para mostrar precio unitario si existe en el detalle_precios
-        let poolPrecios: any[] = [];
-        try {
-          poolPrecios = typeof v.detalle_precios === 'string' ? JSON.parse(v.detalle_precios) : (v.detalle_precios || []);
-        } catch (e) { poolPrecios = []; }
+          if (!acc[nombre]) {
+            acc[nombre] = { 
+              nombre, 
+              total_tabla: (Number(v.pedido_total) || 0), 
+              saldo_tabla: (Number(v.saldo) || 0),
+              total_pedidos: todosLosDelClienteActual.length, 
+              listos_pedidos: fotosListas.length,
+              trabajos: [] 
+            };
+          }
 
-        const trabajosConInfo = fotosListas.map(t => {
-          const info = poolPrecios.find((item: any) => t.servicio?.toUpperCase().includes(item.servicio?.toUpperCase()));
-          return {
+          const trabajosConInfo = fotosListas.map(t => ({
             ...t,
-            p_unit: info ? (Number(info.subtotal) / (Number(info.cantidad) || 1)) : 0,
-            sub: info ? info.subtotal : 0,
-            cant_v: info ? info.cantidad : t.cantidad
-          };
-        });
+            sub: (Number(t.precio_unitario) || 0) * (Number(t.cantidad) || 1),
+            medida: `${t.ancho || '?'} x ${t.alto || '?'}`,
+            mat: t.material || 'Estándar'
+          }));
 
-        acc[nombre].trabajos = [...acc[nombre].trabajos, ...trabajosConInfo];
-      }
-      return acc;
-    }, {})
-  ).map((grupo: any, idx: number) => {
-    const estaAbierto = clienteAbierto === grupo.nombre;
-    
-    // Si ya no debe nada y no hay fotos, ocultamos
-    if (grupo.saldo_tabla <= 0 && grupo.trabajos.length === 0) return null;
-
-    return (
-      <div key={idx} className="bg-white rounded-[24px] shadow-sm border border-slate-200 overflow-hidden mb-3">
-        {/* CABECERA: DATOS REALES DE BASE DE DATOS */}
-        <div 
-          onClick={() => setClienteAbierto(estaAbierto ? null : grupo.nombre)}
-          className="p-4 flex justify-between items-center bg-white cursor-pointer"
-        >
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm ${grupo.saldo_tabla > 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
-              {grupo.nombre.charAt(0)}
-            </div>
-            <div>
-              <h3 className="text-sm font-black text-slate-700 uppercase">{grupo.nombre}</h3>
-              <div className="flex gap-2 mt-1">
-                <span className="text-[9px] font-bold text-slate-400 uppercase">Total: {grupo.total_tabla}</span>
-                <span className="text-[9px] font-bold text-blue-500 uppercase">Acuenta: {grupo.acuenta_tabla}</span>
-                <span className="text-[9px] font-bold text-red-500 uppercase italic">Saldo: {grupo.saldo_tabla} Bs.</span>
-              </div>
-            </div>
-          </div>
-          <span className={`text-slate-300 transition-transform ${estaAbierto ? 'rotate-180' : ''}`}>▼</span>
-        </div>
-
-        {estaAbierto && (
-          <div className="p-4 border-t border-slate-50 bg-slate-50/30">
-            <div className="flex gap-4 overflow-x-auto pb-6 scrollbar-hide">
-              {grupo.trabajos.length > 0 ? (
-                grupo.trabajos.map((t: any) => (
-                  <div key={t.id} className="relative flex-shrink-0 w-48 h-64 perspective">
-                    <div tabIndex={0} className="relative w-full h-full transition-transform duration-700 transform-style-3d group focus:rotate-y-180 active:rotate-y-180 cursor-pointer">
-                      
-                      {/* CARA A: VISTA PREVIA */}
-                      <div className="absolute inset-0 backface-hidden rounded-3xl overflow-hidden border-2 border-white shadow-sm bg-slate-200">
-                        {t.url_foto ? (
-                          <img src={t.url_foto} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase">Sin Diseño</div>
-                        )}
-                        <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 p-4">
-                          <p className="text-[10px] font-black text-white uppercase truncate">{t.servicio}</p>
-                          <p className="text-[8px] text-blue-400 font-bold uppercase tracking-tighter">Estado: {t.estado}</p>
-                        </div>
-                      </div>
-
-                      {/* CARA B: DETALLE DE ESE ITEM */}
-                      <div className="absolute inset-0 backface-hidden rounded-3xl bg-slate-900 text-white p-5 rotate-y-180 flex flex-col">
-                        <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest mb-4">Info Servicio</p>
-                        <div className="flex-1 space-y-2">
-                          <div className="flex justify-between border-b border-slate-800 pb-1">
-                            <span className="text-[9px] text-slate-400 uppercase font-bold">P. Unit</span>
-                            <span className="text-[9px] font-black">{Number(t.p_unit).toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between border-b border-slate-800 pb-1">
-                            <span className="text-[9px] text-slate-400 uppercase font-bold">Cant.</span>
-                            <span className="text-[9px] font-black">{t.cant_v}</span>
-                          </div>
-                          <div className="flex justify-between border-b border-slate-800 pb-1">
-                            <span className="text-[9px] text-emerald-400 uppercase font-bold">Subtotal</span>
-                            <span className="text-[9px] font-black text-emerald-400">{t.sub} Bs.</span>
-                          </div>
-                        </div>
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); t.url_foto && window.open(t.url_foto, '_blank'); }}
-                          className="mt-4 w-full bg-slate-800 border border-slate-700 py-2 rounded-xl text-[9px] font-black uppercase"
-                        >
-                          Ver Imagen 🔍
-                        </button>
-                      </div>
-
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="w-full py-10 text-center">
-                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Esperando terminados en taller...</p>
-                </div>
-              )}
-            </div>
-
-            {/* ACCIÓN FINAL BASADA EN SALDO DE TABLA */}
-            <div className="mt-2 pt-4 border-t border-slate-200">
-               <button 
-                onClick={() => entregarPedidoFinalv2(grupo.nombre)}
-                className="w-full h-14 bg-red-600 text-white rounded-[22px] font-black text-[11px] uppercase tracking-[2px] shadow-xl active:scale-95 transition-transform"
-               >
-                💰 Cobrar {grupo.saldo_tabla} Bs y Finalizar
-               </button>
-            </div>
-          </div>
+          const idsExistentes = new Set(acc[nombre].trabajos.map((tr: any) => tr.id));
+          acc[nombre].trabajos = [...acc[nombre].trabajos, ...trabajosConInfo.filter(tr => !idsExistentes.has(tr.id))];
+          
+          return acc;
+        }, {})
+      ).map((grupo: any, idx: number) => {
+        const estaAbierto = clienteAbierto === grupo.nombre;
+        
+        return (
+          <div key={idx} className="bg-white rounded-[24px] shadow-sm border border-slate-200 overflow-hidden mb-3">
+           {/* CABECERA CLIENTE ACTUALIZADA */}
+<div onClick={() => setClienteAbierto(estaAbierto ? null : grupo.nombre)} className="p-4 flex justify-between items-center cursor-pointer active:bg-slate-50 transition-colors">
+  <div className="flex items-center gap-3">
+    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm ${grupo.saldo_tabla > 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+      {grupo.nombre.charAt(0)}
+    </div>
+    <div>
+      <h3 className="text-sm font-black text-slate-700 uppercase">{grupo.nombre}</h3>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-0.5">
+        <span className="text-[9px] font-bold text-slate-400 uppercase">Total: {grupo.total_tabla} Bs.</span>
+        
+        {/* VOLVEMOS A MOSTRAR EL "A CUENTA" */}
+        <span className="text-[9px] font-bold text-blue-500 uppercase">A cuenta: {grupo.total_tabla - grupo.saldo_tabla} Bs.</span>
+        
+        {grupo.saldo_tabla > 0 ? (
+          <span className="text-[9px] font-black text-red-500 uppercase italic">Saldo: {grupo.saldo_tabla} Bs.</span>
+        ) : (
+          <span className="text-[9px] font-black text-emerald-500 uppercase flex items-center gap-1">Pagado ✓</span>
         )}
       </div>
-    );
-  })}
+    </div>
+  </div>
+  <span className={`text-[8px] font-black px-2 py-1 rounded-full ${grupo.listos_pedidos === grupo.total_pedidos ? 'bg-emerald-500 text-white' : 'bg-blue-100 text-blue-600'}`}>
+    {grupo.listos_pedidos}/{grupo.total_pedidos} LISTOS
+  </span>
 </div>
-    {/* CSS ACTUALIZADO CON SOPORTE PARA CLASE 'HOVER' EN PC Y 'FOCUS' EN MÓVIL */}
+            {estaAbierto && (
+              <div className="p-4 border-t border-slate-50 bg-slate-50/30">
+                <div className="flex gap-4 overflow-x-auto pb-6 scrollbar-hide">
+                  {grupo.trabajos.map((t: any) => (
+                    <div key={t.id} className="relative flex-shrink-0 w-48 h-64 perspective">
+                      <div tabIndex={0} className="relative w-full h-full transition-transform duration-700 transform-style-3d group focus:rotate-y-180 active:rotate-y-180 cursor-pointer">
+                        
+                        {/* CARA A */}
+                        <div className="absolute inset-0 backface-hidden rounded-3xl overflow-hidden border-2 border-white shadow-sm bg-slate-200">
+                          {t.url_foto && <img src={t.url_foto} className="w-full h-full object-cover" />}
+                          <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 p-3">
+                            <p className="text-[10px] font-black text-white uppercase truncate">{t.servicio}</p>
+                            <p className="text-[9px] text-emerald-400 font-black">{t.medida}</p>
+                          </div>
+                        </div>
+
+                        {/* CARA B */}
+                        <div className="absolute inset-0 backface-hidden rounded-3xl bg-slate-900 text-white p-5 rotate-y-180 flex flex-col">
+                          <p className="text-[9px] font-black text-blue-400 uppercase mb-3">Detalles Técnicos</p>
+                          <div className="flex-1 space-y-2">
+                            <div className="flex flex-col border-b border-slate-800 pb-1">
+                              <span className="text-[8px] text-slate-500 uppercase">Medidas</span>
+                              <span className="text-[11px] font-black text-emerald-400">{t.medida}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-slate-800 pb-1">
+                              <span className="text-[8px] text-slate-500 uppercase">Cantidad</span>
+                              <span className="text-[10px] font-black">{t.cantidad}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-slate-800 pb-1">
+                              <span className="text-[8px] text-slate-500 uppercase">Subtotal</span>
+                              <span className="text-[10px] font-black text-blue-400">{t.sub} Bs.</span>
+                            </div>
+                          </div>
+                          <button onClick={(e) => { e.stopPropagation(); t.url_foto && window.open(t.url_foto, '_blank'); }} className="mt-4 w-full bg-blue-600 py-2 rounded-xl text-[9px] font-black uppercase">Ver Foto 🔍</button>
+                        </div>
+
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-2 pt-4 border-t border-slate-200">
+                  <button 
+                    onClick={() => {
+                      if (grupo.saldo_tabla <= 0) {
+                        entregarSoloTrabajos(grupo.nombre); 
+                      } else {
+                        entregarPedidoFinalv2(grupo.nombre);
+                      }
+                    }}
+                    className={`w-full h-14 rounded-[22px] font-black text-[11px] uppercase tracking-[2px] shadow-xl active:scale-95 transition-all flex flex-col items-center justify-center ${grupo.saldo_tabla > 0 ? 'bg-red-600 text-white' : 'bg-emerald-600 text-white'}`}
+                  >
+                    {grupo.saldo_tabla > 0 ? (
+                      <>
+                        <span>💰 Saldo: {grupo.saldo_tabla} Bs.</span>
+                        <span className="text-[8px] opacity-70">Cobrar y Entregar</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>📦 Confirmar Entrega</span>
+                        <span className="text-[8px] opacity-70">El pedido ya fue pagado</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+    
     <style dangerouslySetInnerHTML={{ __html: `
       .perspective { perspective: 1000px; }
       .transform-style-3d { transform-style: preserve-3d; }
       .backface-hidden { backface-visibility: hidden; }
       .rotate-y-180 { transform: rotateY(180deg); }
-
-      /* En PC: Gira al pasar el mouse */
-      .group:hover { transform: rotateY(180deg); }
-      
-      /* En Móvil: Gira al tocar (hacer foco) */
-      .group:focus { transform: rotateY(180deg); }
-      
-      /* Opcional: Para que se mantenga un momento al tocar */
-      .group:active { transform: rotateY(180deg); }
+      .scrollbar-hide::-webkit-scrollbar { display: none; }
+      .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
     `}} />
   </section>
 )}
