@@ -50,6 +50,9 @@ const [listaClientes, setListaClientes] = useState<any[]>([]);
 const [nombreClienteInput, setNombreClienteInput] = useState('');
 const [telClienteInput, setTelClienteInput] = useState('');
 const [tipoClienteInput, setTipoClienteInput] = useState('Regular');
+// --- NUEVOS ESTADOS PARA BÚSQUEDA Y FILTROS DE CLIENTES ---
+const [busquedaCliente, setBusquedaCliente] = useState('');
+const [filtroTipo, setFiltroTipo] = useState('TODOS');
 
 // --- ESTADOS DE FORMULARIO Y TALLER ---
 const [tipoCliente, setTipoCliente] = useState('nuevo');
@@ -383,6 +386,19 @@ const obtenerDatosVS = () => {
       if (!error) setListaClientes(listaClientes.filter(c => c.id !== id));
     }
   };
+  const actualizarNotaCliente = async (id: number, columna: string, texto: string) => {
+  const { error } = await supabase
+    .from('Clientes')
+    .update({ [columna]: texto }) 
+    .eq('id', id);
+
+  if (!error) {
+    // Actualiza la lista local para que el cambio sea instantáneo en pantalla
+    setListaClientes(prev => prev.map(c => c.id === id ? { ...c, [columna]: texto } : c));
+  } else {
+    console.error("Error al guardar nota:", error.message);
+  }
+};
 
   // ==========================================
   // --- LÓGICA DE PROCESAMIENTO DE PEDIDOS ---
@@ -396,23 +412,50 @@ const obtenerDatosVS = () => {
       const idPedidoActual = Date.now();
       const fechaFijaBolivia = getBoliviaISO();
       const nombreLimpio = nombreClienteInput.toUpperCase().trim();
-      
-      // Calculamos el total de este nuevo pedido (suma de todos los trabajos en el carrito)
+
+      // --- [NUEVO: REGISTRO AUTOMÁTICO DE CLIENTE] ---
+      // 1. Verificamos si el cliente existe en la tabla 'Clientes'
+      const { data: clienteExistente } = await supabase
+        .from('Clientes')
+        .select('*')
+        .eq('Nombre', nombreLimpio)
+        .maybeSingle();
+
+      // 2. Si NO existe, lo creamos como 'Regular' automáticamente
+      if (!clienteExistente) {
+        console.log("Cliente nuevo detectado, registrando como Regular...");
+        const { error: errorAutoRegistro } = await supabase
+          .from('Clientes')
+          .insert([{ 
+            Nombre: nombreLimpio, 
+            Telefono: telClienteInput, 
+            Tipo: 'Regular' // <--- Esto asegura que aparezca en tus gráficos
+          }]);
+        
+        if (errorAutoRegistro) {
+          console.error("Error en auto-registro:", errorAutoRegistro);
+        } else {
+          // Actualizamos la lista local de clientes para que el Dashboard lo vea
+          const { data: dataClie } = await supabase.from('Clientes').select('*').order('Nombre', { ascending: true });
+          if (dataClie) setListaClientes(dataClie);
+        }
+      }
+      // --- [FIN DEL NUEVO BLOQUE] ---
+
+      // Calculamos el total de este nuevo pedido
       const totalNuevoTrabajo = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
       
-      // Creamos el desglose detallado para la columna detalle_precios (MANTIENE TU JSON)
       const desglosePreciosNuevos = trabajos.map(t => ({
         servicio: t.servicio.toUpperCase().trim(),
         cantidad: Number(t.cant),
         subtotal: Number(t.precio)
       }));
 
-      // Creamos el resumen de texto para la columna detalle_servicio
       const resumenDetalleNuevo = trabajos.map(t => 
         `${t.cant} ${t.servicio.toUpperCase()} (${t.ancho}x${t.alto})`
       ).join(" // ");
 
-      // 1. INSERTAR EN TALLER (pedidos_activos): Incluimos la nueva columna precio_unitario
+      // 1. INSERTAR EN TALLER (pedidos_activos)
       const { error: errorTaller } = await supabase.from('pedidos_activos').insert(
         trabajos.map(t => ({
           id_pedido: idPedidoActual,
@@ -422,7 +465,6 @@ const obtenerDatosVS = () => {
           alto: t.alto,
           cantidad: Number(t.cant),
           detalle: t.detalle || '',
-          // --- AQUÍ GUARDAMOS EL PRECIO UNITARIO PARA TUS TARJETAS ---
           precio_unitario: Number(t.precio), 
           estado: 'Pendiente',
           fecha: fechaFijaBolivia
@@ -430,7 +472,7 @@ const obtenerDatosVS = () => {
       );
       if (errorTaller) throw errorTaller;
 
-      // 2. GESTIÓN EN REGISTRO_VENTAS: Verificamos si el cliente tiene un pedido "Pendiente" abierto
+      // 2. GESTIÓN EN REGISTRO_VENTAS
       const { data: pedidoExistente } = await supabase
         .from('registro_ventas')
         .select('*')
@@ -439,7 +481,6 @@ const obtenerDatosVS = () => {
         .maybeSingle();
 
       if (pedidoExistente) {
-        // ACTUALIZAR: Si ya existe un pedido pendiente, sumamos el nuevo trabajo al saldo actual
         const nuevoTotalGlobal = (Number(pedidoExistente.pedido_total) || 0) + totalNuevoTrabajo;
         const nuevaCuentaGlobal = (Number(pedidoExistente.cuenta) || 0) + (Number(montoAcuenta) || 0);
         
@@ -454,13 +495,12 @@ const obtenerDatosVS = () => {
             pedido_total: nuevoTotalGlobal,
             cuenta: nuevaCuentaGlobal,
             saldo: Math.max(0, nuevoTotalGlobal - nuevaCuentaGlobal),
-            fecha: fechaFijaBolivia // Actualizamos fecha a la última actividad
+            fecha: fechaFijaBolivia 
           })
           .eq('id_pedido', pedidoExistente.id_pedido);
         
         if (errorUpdate) throw errorUpdate;
       } else {
-        // INSERTAR NUEVO: Si no hay pedido pendiente, creamos el registro desde cero
         const { error: errorVenta } = await supabase.from('registro_ventas').insert([{
           id_pedido: idPedidoActual,
           nombre_cliente: nombreLimpio,
@@ -476,11 +516,9 @@ const obtenerDatosVS = () => {
         if (errorVenta) throw errorVenta;
       }
 
-      // 3. FINALIZACIÓN Y LIMPIEZA
       await Promise.all([refrescarTotalesHoy(), cargarDatosVentas()]);
       alert("¡Pedido guardado y enviado a taller!");
       
-      // Reset de estados
       setTrabajos([]);
       setNombreClienteInput('');
       setTelClienteInput('');
@@ -504,60 +542,67 @@ const obtenerDatosVS = () => {
   };
 
   const entregarPedidoFinalv2 = async (nombreCliente: string) => {
-    try {
-      const nombreLimpio = nombreCliente.trim();
-      const fechaHoy = getBoliviaISO();
-      
-      // Buscamos la venta pendiente del cliente
-      const ventaActual = listaVentas.find(v => v.nombre_cliente?.trim() === nombreLimpio && v.estado === 'Pendiente');
-      if (!ventaActual) return alert("No se encontró un registro pendiente para este cliente.");
+  try {
+    const nombreLimpio = nombreCliente.trim();
+    const fechaHoy = getBoliviaISO();
+    
+    const ventaActual = listaVentas.find(v => v.nombre_cliente?.trim() === nombreLimpio && v.estado === 'Pendiente');
+    if (!ventaActual) return alert("No hay pedidos pendientes.");
 
-      const saldoActual = Number(ventaActual.saldo) || 0;
-      let pagoHoy = 0;
+    const saldoActual = Number(ventaActual.saldo) || 0;
+    
+    // PREGUNTA 1: ¿Cuánto paga hoy?
+    const monto = window.prompt(`CLIENTE: ${nombreLimpio}\nSALDO PENDIENTE: ${saldoActual} Bs.\n\n¿Cuánto cancela hoy?`, saldoActual.toString());
+    if (monto === null) return;
+    const pagoHoy = parseFloat(monto) || 0;
 
-      // Si tiene saldo, preguntamos cuánto paga
-      if (saldoActual > 0) {
-        const monto = window.prompt(`CLIENTE: ${nombreLimpio}\nSALDO PENDIENTE: ${saldoActual} Bs.\n\n¿Cuánto cancela hoy?`, saldoActual.toString());
-        if (monto === null) return; // Canceló la operación
-        pagoHoy = parseFloat(monto) || 0;
+    // PREGUNTA 2: ¿Hay rebaja o el resto se pierde? 
+    // Si lo que paga hoy es menos que el saldo, preguntamos si el resto sigue pendiente o se anula.
+    let nuevoEstado = 'Pendiente';
+    let nuevoTotal = Number(ventaActual.pedido_total);
+
+    if (pagoHoy < saldoActual) {
+      const respuesta = confirm("El pago es menor al saldo. ¿Deseas PERDONAR el resto (Rebaja/Anulación) para cerrar la deuda?\n\nOK = Deuda saldada (Saldo 0).\nCancelar = El resto queda como deuda pendiente.");
+      if (respuesta) {
+        // Ajustamos el total del pedido para que coincida con lo pagado hasta ahora
+        nuevoTotal = (Number(ventaActual.cuenta) || 0) + pagoHoy;
+        nuevoEstado = 'Entregado';
       }
-
-      // Actualizamos el saldo y el estado en registro_ventas
-      const nSaldo = Math.max(0, saldoActual - pagoHoy);
-      const { error: errorVenta } = await supabase
-        .from('registro_ventas')
-        .update({ 
-          cuenta: (Number(ventaActual.cuenta) || 0) + pagoHoy,
-          saldo: nSaldo,
-          estado: nSaldo === 0 ? 'Entregado' : 'Pendiente',
-          fecha: fechaHoy 
-        })
-        .eq('id_pedido', ventaActual.id_pedido);
-
-      if (errorVenta) throw errorVenta;
-
-      // Si seleccionó trabajos específicos en el taller, los archivamos
-      if (pedidosSeleccionados.length > 0) {
-        const { error: errorTaller } = await supabase
-          .from('pedidos_activos')
-          .update({ 
-            estado: 'Archivado', 
-            fecha_entrega: fechaHoy 
-          })
-          .in('id', pedidosSeleccionados);
-        
-        if (errorTaller) throw errorTaller;
-      }
-
-      alert("🚀 Despacho realizado y saldos actualizados.");
-      setPedidosSeleccionados([]);
-      await Promise.all([cargarDatosVentas(), cargarPedidosTaller(), refrescarTotalesHoy()]);
-      
-    } catch (err: any) {
-      alert("Error en entrega: " + err.message);
+    } else {
+      nuevoEstado = 'Entregado';
     }
-  };
 
+    const nSaldo = Math.max(0, (nuevoTotal - ((Number(ventaActual.cuenta) || 0) + pagoHoy)));
+
+    const { error: errorVenta } = await supabase
+      .from('registro_ventas')
+      .update({ 
+        pedido_total: nuevoTotal, // Se ajusta si hubo rebaja
+        cuenta: (Number(ventaActual.cuenta) || 0) + pagoHoy,
+        saldo: nSaldo,
+        estado: nuevoEstado,
+        fecha: fechaHoy 
+      })
+      .eq('id_pedido', ventaActual.id_pedido);
+
+    if (errorVenta) throw errorVenta;
+
+    // Archivar solo los trabajos seleccionados
+    if (pedidosSeleccionados.length > 0) {
+      await supabase
+        .from('pedidos_activos')
+        .update({ estado: 'Archivado', fecha_entrega: fechaHoy })
+        .in('id', pedidosSeleccionados);
+    }
+
+    alert("🚀 Proceso completado. Datos actualizados.");
+    setPedidosSeleccionados([]);
+    await Promise.all([cargarDatosVentas(), cargarPedidosTaller(), refrescarTotalesHoy()]);
+    
+  } catch (err: any) {
+    alert("Error: " + err.message);
+  }
+};
   // ==========================================
   // --- GESTIÓN DE SERVICIOS ---
   // ==========================================
@@ -960,153 +1005,271 @@ const obtenerDatosVS = () => {
   </div>
 )}
 
-            {/* VISTA: REGISTRO DE CLIENTES ACTUALIZADO */}
-            {accionInicio === 'nuevo-cliente' && (
-              <div className="bg-white p-6 rounded-3xl shadow-xl border border-gray-100 animate-in slide-in-from-bottom">
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-xl font-black text-purple-600 uppercase italic">Gestión de Clientes</h2>
-                  <button onClick={() => setAccionInicio('menu')} className="bg-gray-100 p-2 rounded-full">✕</button>
+          {/* VISTA: REGISTRO DE CLIENTES TOTALMENTE CORREGIDO */}
+{accionInicio === 'nuevo-cliente' && (
+  <div className="bg-white p-6 rounded-3xl shadow-xl border border-gray-100 animate-in slide-in-from-bottom max-w-2xl mx-auto">
+    
+    {/* CABECERA */}
+    <div className="flex justify-between items-center mb-6">
+      <h2 className="text-xl font-black text-purple-600 uppercase italic">Gestión de Clientes</h2>
+      <button onClick={() => setAccionInicio('menu')} className="bg-gray-100 p-2 rounded-full hover:bg-red-50 hover:text-red-500 transition-colors">✕</button>
+    </div>
+    
+    {/* FORMULARIO DE REGISTRO */}
+    <div className="space-y-4 mb-8 bg-purple-50/30 p-4 rounded-2xl border border-purple-100">
+      <p className="text-[10px] font-black text-purple-400 uppercase ml-1">Nuevo Registro</p>
+      <input 
+        type="tel" 
+        placeholder="Teléfono" 
+        className="w-full p-4 bg-white border-2 border-gray-100 rounded-2xl outline-none focus:border-purple-500 font-bold"
+        value={telClienteInput}
+        onChange={(e) => setTelClienteInput(e.target.value)}
+      />
+      <input 
+        type="text" 
+        placeholder="Nombre Completo" 
+        className="w-full p-4 bg-white border-2 border-gray-100 rounded-2xl outline-none focus:border-purple-500 font-bold uppercase"
+        value={nombreClienteInput}
+        onChange={(e) => setNombreClienteInput(e.target.value)}
+      />
+
+      {/* SELECTOR DE TIPO (DURANTE REGISTRO) */}
+      <div className="flex gap-2 p-1 bg-white border border-gray-100 rounded-2xl">
+        {['Regular', 'Empresa', 'Decoradora'].map((t) => (
+          <button 
+            key={t}
+            onClick={() => setTipoClienteInput(t)}
+            className={`flex-1 py-3 rounded-xl text-[10px] font-black transition-all ${tipoClienteInput === t ? 'bg-purple-600 text-white shadow-md' : 'text-gray-400'}`}
+          >
+            {t.toUpperCase()}
+          </button>
+        ))}
+      </div>
+
+      <button 
+        onClick={guardarClienteBD}
+        className="w-full bg-purple-600 text-white p-5 rounded-2xl font-black shadow-lg uppercase italic hover:bg-purple-700 active:scale-95 transition-all"
+      >
+        Registrar Cliente
+      </button>
+    </div>
+
+    {/* SECCIÓN DE LISTADO, FILTROS Y COMENTARIOS */}
+    <div className="border-t pt-6">
+      
+      {/* BUSCADOR Y TÍTULO */}
+      <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
+        <h3 className="text-[11px] font-black text-gray-500 uppercase tracking-widest">Base de Datos de Clientes</h3>
+        <div className="relative w-full md:w-64">
+          <input 
+            type="text" 
+            placeholder="🔍 Buscar nombre o telf..." 
+            value={busquedaCliente}
+            onChange={(e) => setBusquedaCliente(e.target.value)}
+            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs outline-none focus:border-purple-400 font-bold"
+          />
+        </div>
+      </div>
+
+      {/* FILTRO POR TIPO (PARA LA LISTA) */}
+      <div className="flex gap-2 mb-6 overflow-x-auto pb-2 scrollbar-hide">
+        {['TODOS', 'REGULAR', 'EMPRESA', 'DECORADORA'].map((t) => (
+          <button
+            key={t}
+            onClick={() => setFiltroTipo(t)}
+            className={`px-4 py-2 rounded-xl text-[9px] font-black transition-all whitespace-nowrap ${
+              filtroTipo === t ? 'bg-purple-600 text-white shadow-md' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+      
+      {/* LISTA DINÁMICA DE CLIENTES CON TARJETAS DE COMENTARIOS */}
+      <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scroll">
+        {listaClientes
+          .filter(c => {
+            const coincideTipo = filtroTipo === 'TODOS' || c.Tipo?.toUpperCase() === filtroTipo;
+            const coincideBusqueda = 
+              c.Nombre?.toLowerCase().includes(busquedaCliente.toLowerCase()) || 
+              c.Telefono?.includes(busquedaCliente);
+            return coincideTipo && coincideBusqueda;
+          })
+          .map((c) => (
+          <div key={c.id} className="bg-white border-2 border-gray-50 rounded-2xl p-4 shadow-sm hover:border-purple-100 transition-all group">
+            
+            {/* INFO BÁSICA Y BOTÓN ELIMINAR */}
+            <div className="flex justify-between items-start mb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-black uppercase text-gray-800">{c.Nombre}</p>
+                  <span className={`text-[7px] font-black px-2 py-0.5 rounded uppercase ${
+                    c.Tipo === 'Empresa' ? 'bg-blue-100 text-blue-600' : 
+                    c.Tipo === 'Decoradora' ? 'bg-pink-100 text-pink-600' : 
+                    'bg-gray-100 text-gray-500'
+                  }`}>
+                    {c.Tipo || 'Regular'}
+                  </span>
                 </div>
+                <p className="text-[10px] text-gray-400 font-bold mt-1">📱 {c.Telefono || 'Sin número registrado'}</p>
+              </div>
+              <button 
+                onClick={() => eliminarCliente(c.id, c.Nombre)} 
+                className="opacity-0 group-hover:opacity-100 text-red-200 hover:text-red-500 p-2 transition-all"
+              >
+                🗑️
+              </button>
+            </div>
+
+            {/* PARTE DE EDICIÓN DE COMENTARIOS (PREFERENCIAS Y ALERTAS) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+              
+              {/* Bloque Preferencias */}
+              <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-100/50">
+                <label className="text-[8px] font-black text-blue-500 uppercase block mb-1.5 flex items-center gap-1">
+                  ⭐ Preferencias de Impresión
+                </label>
+                <textarea 
+                  defaultValue={c.preferencias || ''}
+                  onBlur={(e) => actualizarNotaCliente(c.id, 'preferencias', e.target.value)}
+                  placeholder="Ej: Lona mate, ojalillos plateados..."
+                  className="w-full bg-transparent border-none focus:ring-0 text-[10px] text-blue-900 placeholder-blue-300 resize-none p-0 leading-tight"
+                  rows={2}
+                />
+              </div>
+
+              {/* Bloque Alertas */}
+              <div className="bg-red-50/50 p-3 rounded-xl border border-red-100/50">
+                <label className="text-[8px] font-black text-red-500 uppercase block mb-1.5 flex items-center gap-1">
+                  ⚠️ Alertas / Notas de Pago
+                </label>
+                <textarea 
+                  defaultValue={c.alertas || ''}
+                  onBlur={(e) => actualizarNotaCliente(c.id, 'alertas', e.target.value)}
+                  placeholder="Ej: Regatea mucho, no dejar salir sin saldo..."
+                  className="w-full bg-transparent border-none focus:ring-0 text-[10px] text-red-900 placeholder-red-300 resize-none p-0 leading-tight"
+                  rows={2}
+                />
+              </div>
+
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+)}
+{/* VISTA: REGISTRO DE PEDIDO - DISEÑO ESTILO RECIBO PROFESIONAL */}
+{accionInicio === 'nuevo-pedido' && (
+  <div className="bg-white rounded-3xl shadow-2xl border border-gray-100 animate-in slide-in-from-bottom duration-300 max-w-md mx-auto overflow-hidden mb-24">
+    
+    {/* Encabezado del Recibo */}
+    <div className="bg-slate-800 p-4 text-center relative">
+      <h2 className="text-white font-black italic tracking-widest uppercase text-sm">Nota de Venta / Recibo</h2>
+      <div className="flex justify-center gap-2 items-center">
+        <p className="text-slate-400 text-[9px] font-bold tracking-tighter uppercase">Click Gestión de Inventario</p>
+        {/* Etiqueta visual de categoría asignada */}
+        <span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase ${
+          tipoClienteInput === 'DECORADORA' ? 'bg-blue-500 text-white' : 
+          tipoClienteInput === 'EMPRESA' ? 'bg-green-500 text-white' : 'bg-orange-500 text-white'
+        }`}>
+          {tipoClienteInput || 'REGULAR'}
+        </span>
+      </div>
+      <button 
+        onClick={() => { setAccionInicio('menu'); setTrabajos([]); setNombreClienteInput(''); setTelClienteInput(''); setTipoClienteInput('REGULAR'); }} 
+        className="absolute right-4 top-4 text-slate-400 hover:text-white font-bold"
+      >✕</button>
+    </div>
+
+    <div className="p-5 space-y-4">
+      {/* 1. SECCIÓN: DATOS DEL CLIENTE */}
+      <div className="space-y-2 border-b pb-4">
+        <div className="flex gap-2">
+          <div className="w-1/3">
+            <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Teléfono</label>
+            <input 
+              type="tel" 
+              className="w-full p-3 bg-gray-50 border rounded-xl font-bold text-xs outline-none focus:border-blue-500 shadow-sm"
+              value={telClienteInput}
+              onChange={(e) => {
+                const tel = e.target.value;
+                setTelClienteInput(tel);
+                const encontrado = listaClientes.find(c => c.Telefono === tel);
+                if (encontrado) { 
+                  setNombreClienteInput(encontrado.Nombre); 
+                  setTipoClienteInput(encontrado.Tipo); 
+                } else {
+                  // Si el teléfono no existe, asumimos que es REGULAR
+                  setTipoClienteInput('REGULAR');
+                }
+              }}
+            />
+          </div>
+          <div className="flex-1 relative">
+            <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Cliente</label>
+            <input 
+              type="text" 
+              className="w-full p-3 bg-gray-50 border rounded-xl font-bold text-xs uppercase outline-none shadow-sm"
+              value={nombreClienteInput}
+              onChange={(e) => {
+                const nom = e.target.value;
+                setNombreClienteInput(nom);
+                setMostrarSugerencias(true);
                 
-                <div className="space-y-4 mb-8">
-                  <input 
-                    type="tel" 
-                    placeholder="Telefono" 
-                    className="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-purple-500 font-bold"
-                    value={telClienteInput}
-                    onChange={(e) => setTelClienteInput(e.target.value)}
-                  />
-                  <input 
-                    type="text" 
-                    placeholder="Nombre Completo" 
-                    className="w-full p-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-purple-500 font-bold"
-                    value={nombreClienteInput}
-                    onChange={(e) => setNombreClienteInput(e.target.value)}
-                  />
+                // Si escribes un nombre que no está en la lista, es REGULAR
+                const existe = listaClientes.find(c => c.Nombre.toLowerCase() === nom.toLowerCase());
+                if (!existe) {
+                  setTipoClienteInput('REGULAR');
+                } else {
+                  setTipoClienteInput(existe.Tipo);
+                  setTelClienteInput(existe.Telefono);
+                }
 
-                  {/* NUEVO: SELECTOR DE TIPO */}
-                  <div className="flex gap-2 p-1 bg-gray-100 rounded-2xl">
-                    {['Regular', 'Empresa', 'Decoradora'].map((t) => (
-                      <button 
-                        key={t}
-                        onClick={() => setTipoClienteInput(t)}
-                        className={`flex-1 py-3 rounded-xl text-[10px] font-black transition-all ${tipoClienteInput === t ? 'bg-purple-600 text-white shadow-md' : 'text-gray-400'}`}
-                      >
-                        {t.toUpperCase()}
-                      </button>
-                    ))}
-                  </div>
-
-                  <button 
-                    onClick={guardarClienteBD}
-                    className="w-full bg-purple-600 text-white p-5 rounded-2xl font-black shadow-lg uppercase italic"
-                  >
-                    Registrar Cliente
-                  </button>
-                </div>
-
-                <div className="border-t pt-4">
-                  <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Lista de Clientes</h3>
-                  <div className="space-y-2 max-h-60 overflow-y-auto">
-                    {listaClientes.map((c) => (
-                      <div key={c.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
-                        <div>
-                          <p className="text-xs font-bold uppercase">{c.Nombre}</p>
-                          <div className="flex gap-2 items-center">
-                            <p className="text-[10px] text-gray-500">{c.Telefono}</p>
-                            <span className="text-[8px] font-black bg-gray-200 px-2 py-0.5 rounded text-gray-600 uppercase">
-                              {c.Tipo || 'Regular'}
-                            </span>
-                          </div>
-                        </div>
-                        <button onClick={() => eliminarCliente(c.id, c.Nombre)} className="text-red-400 p-2">🗑️</button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                if (nom === "") { 
+                  setTelClienteInput(""); 
+                  setTipoClienteInput('REGULAR');
+                  setMostrarSugerencias(false); 
+                }
+              }}
+            />
+            {/* Buscador de sugerencias */}
+            {mostrarSugerencias && nombreClienteInput.length > 1 && (
+              <div className="absolute z-30 w-full mt-1 bg-white shadow-2xl rounded-2xl border border-gray-100 max-h-40 overflow-y-auto">
+                {listaClientes
+                  .filter(c => c.Nombre.toLowerCase().includes(nombreClienteInput.toLowerCase()))
+                  .map(c => (
+                    <div 
+                      key={c.id} 
+                      className="p-3 hover:bg-blue-600 hover:text-white cursor-pointer border-b text-[10px] font-black uppercase transition-colors flex justify-between items-center"
+                      onClick={() => {
+                        setNombreClienteInput(c.Nombre);
+                        setTelClienteInput(c.Telefono);
+                        setTipoClienteInput(c.Tipo || 'REGULAR');
+                        setMostrarSugerencias(false);
+                      }}
+                    >
+                      <span>{c.Nombre}</span>
+                      <span className="text-[7px] opacity-70">{c.Tipo || 'REGULAR'}</span>
+                    </div>
+                  ))}
               </div>
             )}
-{/* VISTA: REGISTRO DE PEDIDO - DISEÑO ESTILO RECIBO PROFESIONAL */}
-          {accionInicio === 'nuevo-pedido' && (
-            <div className="bg-white rounded-3xl shadow-2xl border border-gray-100 animate-in slide-in-from-bottom duration-300 max-w-md mx-auto overflow-hidden mb-24">
-              
-              {/* Encabezado del Recibo */}
-              <div className="bg-slate-800 p-4 text-center relative">
-                <h2 className="text-white font-black italic tracking-widest uppercase text-sm">Nota de Venta / Recibo</h2>
-                <p className="text-slate-400 text-[9px] font-bold tracking-tighter uppercase">Click Gestión de Inventario</p>
-                <button 
-                  onClick={() => { setAccionInicio('menu'); setTrabajos([]); setNombreClienteInput(''); setTelClienteInput(''); }} 
-                  className="absolute right-4 top-4 text-slate-400 hover:text-white font-bold"
-                >✕</button>
-              </div>
+          </div>
+        </div>
+      </div>
 
-              <div className="p-5 space-y-4">
-                {/* 1. SECCIÓN: DATOS DEL CLIENTE */}
-                <div className="space-y-2 border-b pb-4">
-                  <div className="flex gap-2">
-                    <div className="w-1/3">
-                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Teléfono</label>
-                      <input 
-                        type="tel" 
-                        className="w-full p-3 bg-gray-50 border rounded-xl font-bold text-xs outline-none focus:border-blue-500 shadow-sm"
-                        value={telClienteInput}
-                        onChange={(e) => {
-                          setTelClienteInput(e.target.value);
-                          const encontrado = listaClientes.find(c => c.Telefono === e.target.value);
-                          if (encontrado) { 
-                            setNombreClienteInput(encontrado.Nombre); 
-                            setTipoClienteInput(encontrado.Tipo); 
-                          }
-                        }}
-                      />
-                    </div>
-                    <div className="flex-1 relative">
-                      <label className="text-[9px] font-black text-gray-400 uppercase ml-1">Cliente</label>
-                      <input 
-                        type="text" 
-                        className="w-full p-3 bg-gray-50 border rounded-xl font-bold text-xs uppercase outline-none shadow-sm"
-                        value={nombreClienteInput}
-                        onChange={(e) => {
-                          setNombreClienteInput(e.target.value);
-                          setMostrarSugerencias(true);
-                          if (e.target.value === "") { setTelClienteInput(""); setMostrarSugerencias(false); }
-                        }}
-                      />
-                      {/* Buscador de sugerencias */}
-                      {mostrarSugerencias && nombreClienteInput.length > 1 && (
-                        <div className="absolute z-30 w-full mt-1 bg-white shadow-2xl rounded-2xl border border-gray-100 max-h-40 overflow-y-auto">
-                          {listaClientes
-                            .filter(c => c.Nombre.toLowerCase().includes(nombreClienteInput.toLowerCase()))
-                            .map(c => (
-                              <div 
-                                key={c.id} 
-                                className="p-3 hover:bg-blue-600 hover:text-white cursor-pointer border-b text-[10px] font-black uppercase transition-colors"
-                                onClick={() => {
-                                  setNombreClienteInput(c.Nombre);
-                                  setTelClienteInput(c.Telefono);
-                                  setTipoClienteInput(c.Tipo || 'Regular');
-                                  setMostrarSugerencias(false);
-                                }}
-                              >
-                                {c.Nombre}
-                              </div>
-                            ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* 2. SECCIÓN: AGREGAR TRABAJO */}
-<div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 space-y-3">
-  <select
-    className="w-full p-3 rounded-xl border border-blue-200 text-xs font-black uppercase bg-white outline-none"
-    value={material}
-    onChange={(e) => setMaterial(e.target.value)}
-  >
-    <option value="">-- SELECCIONAR SERVICIO --</option>
-    {listaServicios.map((s, i) => <option key={i} value={s}>{s}</option>)}
-  </select>
+      {/* 2. SECCIÓN: AGREGAR TRABAJO */}
+      <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 space-y-3">
+        <select
+          className="w-full p-3 rounded-xl border border-blue-200 text-xs font-black uppercase bg-white outline-none"
+          value={material}
+          onChange={(e) => setMaterial(e.target.value)}
+        >
+          <option value="">-- SELECCIONAR SERVICIO --</option>
+          {listaServicios.map((s, i) => <option key={i} value={s}>{s}</option>)}
+        </select>
 
   {/* Inputs con etiquetas de Metros (m) */}
   <div className="grid grid-cols-3 gap-2">
@@ -1241,7 +1404,7 @@ const obtenerDatosVS = () => {
       )}
     </div>
 {/* ========================================== */}
-{/* --- PESTAÑA PEDIDOS (CORREGIDA CON FILTRO) --- */}
+{/* --- PESTAÑA PEDIDOS (ELEGANT MINIMALIST) --- */}
 {/* ========================================== */}
 {pestaña === 'pedidos' && (
   <section className="animate-in fade-in duration-500 p-6 pb-32 bg-[#F8FAFC]">
@@ -1262,15 +1425,17 @@ const obtenerDatosVS = () => {
     <div className="space-y-4">
       {Object.values(
         listaPedidosTaller
-          // 🔥 CORRECCIÓN 1: Filtramos los archivados ANTES de empezar a agrupar
           .filter((p: any) => p.estado !== 'Archivado')
           .reduce((acc: any, pedido: any) => {
             if (!acc[pedido.nombre_cliente]) {
+              // BUSCAMOS SOLO LAS PREFERENCIAS DEL CLIENTE
               const infoCliente = listaClientes.find(c => c.Nombre === pedido.nombre_cliente);
+              
               acc[pedido.nombre_cliente] = { 
                 nombre: pedido.nombre_cliente,
                 telefono: infoCliente?.Telefono || '',
                 tipo: infoCliente?.Tipo || 'Cliente',
+                preferencias: infoCliente?.preferencias || '', // Info clave aquí
                 trabajos: [],
                 total: 0, espera: 0, haciendo: 0, listos: 0
               };
@@ -1278,7 +1443,6 @@ const obtenerDatosVS = () => {
             acc[pedido.nombre_cliente].trabajos.push(pedido);
             acc[pedido.nombre_cliente].total++;
             
-            // Contadores de etiquetas
             if (pedido.estado === 'Pendiente') acc[pedido.nombre_cliente].espera++;
             if (pedido.estado === 'Diseñando') acc[pedido.nombre_cliente].haciendo++;
             if (pedido.estado === 'Para Imprimir' || pedido.estado === 'Finalizado') acc[pedido.nombre_cliente].listos++;
@@ -1286,7 +1450,6 @@ const obtenerDatosVS = () => {
             return acc;
           }, {})
       )
-      // 🔥 CORRECCIÓN 2: El filtro final ahora solo muestra grupos que tienen trabajos pendientes de terminar
       .filter((grupo: any) => grupo.listos < grupo.total)
       .map((grupo: any, idx: number) => {
         const abierto = clienteAbierto === grupo.nombre;
@@ -1294,21 +1457,36 @@ const obtenerDatosVS = () => {
         return (
           <div key={idx} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all">
             
-            {/* HEADER CLIENTE (Sin cambios, tu diseño es excelente) */}
+            {/* HEADER CLIENTE (Elegante y Simple) */}
             <div 
               onClick={() => setClienteAbierto(abierto ? null : grupo.nombre)}
               className={`p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition-colors ${abierto ? 'bg-slate-50/80 border-b border-slate-100' : ''}`}
             >
-              <div className="flex-1">
+              <div className="flex-1 pr-4"> {/* Añadido padding derecho para separar de los contadores */}
                 <div className="flex items-center gap-2 mb-0.5">
                   <h3 className="font-bold text-slate-800 text-base">{grupo.nombre}</h3>
-                  <span className="text-[9px] px-2 py-0.5 bg-slate-100 text-slate-500 rounded-md font-bold uppercase tracking-tighter">
+                  <span className={`text-[9px] px-2 py-0.5 rounded-md font-bold uppercase tracking-tighter ${
+                    grupo.tipo === 'Empresa' ? 'bg-blue-100 text-blue-600' : 
+                    grupo.tipo === 'Decoradora' ? 'bg-pink-100 text-pink-600' : 'bg-slate-100 text-slate-500'
+                  }`}>
                     {grupo.tipo}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 font-medium">{grupo.telefono}</p>
+                
+                {/* --- SECCIÓN DE DETALLES DEL CLIENTE (TELF Y PREFERENCIAS MINI) --- */}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:gap-3">
+                  <p className="text-xs text-slate-400 font-medium">{grupo.telefono}</p>
+                  
+                  {/* --- NUEVO: PREFERENCIAS MINIMALISTAS EN LA ESQUINA DEL TEXTO --- */}
+                  {grupo.preferencias && (
+                    <span className="inline-block mt-1 sm:mt-0 text-[10px] font-medium text-blue-500 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 italic truncate max-w-xs" title={grupo.preferencias}>
+                      Pref: {grupo.preferencias}
+                    </span>
+                  )}
+                </div>
               </div>
 
+              {/* Contadores (Sin cambios) */}
               <div className="flex gap-3 items-center mr-4">
                 {grupo.espera > 0 && <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span><span className="text-[10px] font-bold text-slate-400">{grupo.espera}</span></div>}
                 {grupo.haciendo > 0 && <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span><span className="text-[10px] font-bold text-orange-500">{grupo.haciendo}</span></div>}
@@ -1318,9 +1496,10 @@ const obtenerDatosVS = () => {
               <span className={`text-slate-300 transition-transform ${abierto ? 'rotate-180' : ''}`}>▾</span>
             </div>
 
-            {/* LISTA DE TRABAJOS (Igual a tu código, pero ahora los datos vienen filtrados) */}
+            {/* CONTENIDO DESPLEGABLE (SOLO LISTA DE TRABAJOS, LIMPIO) */}
             {abierto && (
               <div className="p-3 space-y-2 bg-[#FCFDFF]">
+                {/* LISTA DE TRABAJOS (Tu diseño original sin el bloque de avisos azul) */}
                 {grupo.trabajos.map((trabajo: any) => {
                   const listo = trabajo.estado === 'Para Imprimir' || trabajo.estado === 'Finalizado';
                   const doing = trabajo.estado === 'Diseñando';
@@ -1344,7 +1523,6 @@ const obtenerDatosVS = () => {
                         </div>
                       </div>
 
-                      {/* Botón de subida y estados se mantienen igual... */}
                       {!listo && (
                          <div className="mb-4">
                             <button 
@@ -1489,7 +1667,7 @@ const obtenerDatosVS = () => {
       </section>
     )}
 {/* ========================================== */}
-{/* --- PESTAÑA DESPACHO (REPORTES) --- */}
+{/* --- PESTAÑA DESPACHO (REPORTES + ALERTAS) --- */}
 {/* ========================================== */}
 {pestaña === 'reportes' && (
   <section className="animate-in fade-in duration-500 p-4 pb-32 bg-[#F1F5F9] min-h-screen">
@@ -1498,7 +1676,6 @@ const obtenerDatosVS = () => {
         listaVentas.reduce((acc: any, v: any) => {
           const nombre = v.nombre_cliente?.toUpperCase().trim() || "S/N";
           
-          // Solo mostramos lo que NO está archivado
           const todosLosDelClienteActual = listaPedidosTaller.filter(p => 
             p.nombre_cliente?.toUpperCase().trim() === nombre &&
             p.estado !== 'Archivado'
@@ -1508,8 +1685,13 @@ const obtenerDatosVS = () => {
           if (fotosListas.length === 0) return acc;
 
           if (!acc[nombre]) {
+            // BUSCAMOS LA INFO EXTENDIDA DEL CLIENTE (ALERTAS E ID)
+            const infoC = listaClientes.find(c => c.Nombre?.toUpperCase().trim() === nombre);
+            
             acc[nombre] = { 
+              id_cliente: infoC?.id, // Necesario para el botón de editar
               nombre, 
+              alertas: infoC?.alertas || '', 
               total_tabla: (Number(v.pedido_total) || 0), 
               saldo_tabla: (Number(v.saldo) || 0),
               total_pedidos: todosLosDelClienteActual.length, 
@@ -1535,40 +1717,59 @@ const obtenerDatosVS = () => {
         
         return (
           <div key={idx} className="bg-white rounded-[24px] shadow-sm border border-slate-200 overflow-hidden mb-3">
-           {/* CABECERA CLIENTE ACTUALIZADA */}
-<div onClick={() => setClienteAbierto(estaAbierto ? null : grupo.nombre)} className="p-4 flex justify-between items-center cursor-pointer active:bg-slate-50 transition-colors">
-  <div className="flex items-center gap-3">
-    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm ${grupo.saldo_tabla > 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
-      {grupo.nombre.charAt(0)}
-    </div>
-    <div>
-      <h3 className="text-sm font-black text-slate-700 uppercase">{grupo.nombre}</h3>
-      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-0.5">
-        <span className="text-[9px] font-bold text-slate-400 uppercase">Total: {grupo.total_tabla} Bs.</span>
-        
-        {/* VOLVEMOS A MOSTRAR EL "A CUENTA" */}
-        <span className="text-[9px] font-bold text-blue-500 uppercase">A cuenta: {grupo.total_tabla - grupo.saldo_tabla} Bs.</span>
-        
-        {grupo.saldo_tabla > 0 ? (
-          <span className="text-[9px] font-black text-red-500 uppercase italic">Saldo: {grupo.saldo_tabla} Bs.</span>
-        ) : (
-          <span className="text-[9px] font-black text-emerald-500 uppercase flex items-center gap-1">Pagado ✓</span>
-        )}
-      </div>
-    </div>
-  </div>
-  <span className={`text-[8px] font-black px-2 py-1 rounded-full ${grupo.listos_pedidos === grupo.total_pedidos ? 'bg-emerald-500 text-white' : 'bg-blue-100 text-blue-600'}`}>
-    {grupo.listos_pedidos}/{grupo.total_pedidos} LISTOS
-  </span>
-</div>
+            
+            {/* CABECERA CLIENTE CON ALERTAS */}
+            <div onClick={() => setClienteAbierto(estaAbierto ? null : grupo.nombre)} className="p-4 flex justify-between items-center cursor-pointer active:bg-slate-50 transition-colors">
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm ${grupo.saldo_tabla > 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                  {grupo.nombre.charAt(0)}
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-700 uppercase">{grupo.nombre}</h3>
+                  
+                  {/* --- SECCIÓN DE ALERTAS Y COBRO --- */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5">
+                    {grupo.saldo_tabla > 0 ? (
+                      <span className="text-[9px] font-black text-red-500 uppercase italic">Saldo: {grupo.saldo_tabla} Bs.</span>
+                    ) : (
+                      <span className="text-[9px] font-black text-emerald-500 uppercase">Pagado ✓</span>
+                    )}
+
+                    {/* MOSTRAR ALERTA SI EXISTE */}
+                    {grupo.alertas && (
+                      <span className="text-[9px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded animate-pulse">
+                         ⚠️ {grupo.alertas}
+                      </span>
+                    )}
+
+                    {/* BOTÓN EDITAR ALERTA (SUTIL) */}
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const nAlerta = prompt("Nota/Alerta para cobro:", grupo.alertas);
+                        if (nAlerta !== null) actualizarNotaCliente(grupo.id_cliente, 'alertas', nAlerta);
+                      }}
+                      className="text-[8px] font-black text-slate-400 border border-slate-200 px-1.5 rounded hover:bg-slate-100"
+                    >
+                      EDITAR NOTA
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <span className={`text-[8px] font-black px-2 py-1 rounded-full ${grupo.listos_pedidos === grupo.total_pedidos ? 'bg-emerald-500 text-white' : 'bg-blue-100 text-blue-600'}`}>
+                {grupo.listos_pedidos}/{grupo.total_pedidos} LISTOS
+              </span>
+            </div>
+
             {estaAbierto && (
               <div className="p-4 border-t border-slate-50 bg-slate-50/30">
+                {/* CARROUSEL DE TRABAJOS (TARJETAS 3D) */}
                 <div className="flex gap-4 overflow-x-auto pb-6 scrollbar-hide">
                   {grupo.trabajos.map((t: any) => (
                     <div key={t.id} className="relative flex-shrink-0 w-48 h-64 perspective">
                       <div tabIndex={0} className="relative w-full h-full transition-transform duration-700 transform-style-3d group focus:rotate-y-180 active:rotate-y-180 cursor-pointer">
                         
-                        {/* CARA A */}
+                        {/* CARA A (Foto) */}
                         <div className="absolute inset-0 backface-hidden rounded-3xl overflow-hidden border-2 border-white shadow-sm bg-slate-200">
                           {t.url_foto && <img src={t.url_foto} className="w-full h-full object-cover" />}
                           <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/95 p-3">
@@ -1577,7 +1778,7 @@ const obtenerDatosVS = () => {
                           </div>
                         </div>
 
-                        {/* CARA B */}
+                        {/* CARA B (Info Técnica) */}
                         <div className="absolute inset-0 backface-hidden rounded-3xl bg-slate-900 text-white p-5 rotate-y-180 flex flex-col">
                           <p className="text-[9px] font-black text-blue-400 uppercase mb-3">Detalles Técnicos</p>
                           <div className="flex-1 space-y-2">
@@ -1596,12 +1797,12 @@ const obtenerDatosVS = () => {
                           </div>
                           <button onClick={(e) => { e.stopPropagation(); t.url_foto && window.open(t.url_foto, '_blank'); }} className="mt-4 w-full bg-blue-600 py-2 rounded-xl text-[9px] font-black uppercase">Ver Foto 🔍</button>
                         </div>
-
                       </div>
                     </div>
                   ))}
                 </div>
 
+                {/* BOTÓN FINAL DE ACCIÓN */}
                 <div className="mt-2 pt-4 border-t border-slate-200">
                   <button 
                     onClick={() => {
@@ -1993,29 +2194,53 @@ const obtenerDatosVS = () => {
     <p className="text-[12px] font-black text-slate-800 uppercase italic">Ingresos por Categoría</p>
   </div>
 
-  <div className="flex-1 w-full">
+  <div className="flex-1 w-full overflow-hidden">
     <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={obtenerDatosVS()} margin={{ top: 20, right: 0, left: -35, bottom: 0 }}>
+      <BarChart 
+        data={obtenerDatosVS()} 
+        margin={{ top: 30, right: 10, left: -20, bottom: 20 }}
+      >
         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+        
         <XAxis 
           dataKey="name" 
           axisLine={false} 
           tickLine={false} 
-          tick={{fontSize: 9, fontWeight: '900', fill: '#64748B'}} 
+          interval={0}
+          height={30}
+          tick={{
+            fontSize: 7.5, 
+            fontWeight: '900', 
+            fill: '#64748B'
+          }}
         />
+
         <YAxis hide={true} />
-        <Tooltip cursor={{fill: '#F8FAFC', radius: 15}} contentStyle={{ borderRadius: '20px', border: 'none' }} />
-        <Bar dataKey="total" radius={[10, 10, 10, 10]} barSize={30}>
+        
+        <Tooltip 
+          cursor={{fill: '#F8FAFC', radius: 15}} 
+          contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} 
+        />
+
+        <Bar dataKey="total" radius={[10, 10, 10, 10]} barSize={40}>
           {obtenerDatosVS().map((entry, index) => (
-            <Cell key={`cell-${index}`} fill={['#3B82F6', '#10B981', '#64748B'][index % 3]} />
+            <Cell key={`cell-${index}`} fill={['#3B82F6', '#10B981', '#F59E0B'][index % 3]} />
           ))}
+          
           <LabelList 
             dataKey="total" 
+            position="top"
             content={(props: any) => {
               const { x, y, width, value } = props;
               return (
-                <text x={x + width / 2} y={y - 10} fill="#1E293B" className="text-[9px] font-black" textAnchor="middle">
-                  {`${Number(value).toLocaleString()}`}
+                <text 
+                  x={x + width / 2} 
+                  y={y - 12} 
+                  fill="#1E293B" 
+                  style={{ fontSize: '10px', fontWeight: '900' }}
+                  textAnchor="middle"
+                >
+                  {`${Number(value).toLocaleString()} Bs.`}
                 </text>
               );
             }} 
