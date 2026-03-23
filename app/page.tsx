@@ -208,6 +208,33 @@ const obtenerDatosVS = () => {
   }));
 };
 // ==========================================
+// --- ESCUCHA EN TIEMPO REAL (REALTIME) ---
+// ==========================================
+useEffect(() => {
+  // Suscripción a la tabla pedidos_activos
+  const canalTaller = supabase
+    .channel('cambios-taller-en-vivo')
+    .on(
+      'postgres_changes', 
+      { 
+        event: '*', 
+        schema: 'public', 
+        table: 'pedidos_activos' 
+      }, 
+      (payload) => {
+        // Cuando detecta un cambio, ejecuta la función para recargar la lista
+        cargarPedidosTaller();
+      }
+    )
+    .subscribe();
+
+  // Limpiar la conexión al salir de la página
+  return () => {
+    supabase.removeChannel(canalTaller);
+  };
+}, []); 
+// Nota: cargarPedidosTaller debe estar definida abajo para que esto funcione
+// ==========================================
   // --- CARGA Y REFRESCO DE DATOS ---
   // ==========================================
 
@@ -572,11 +599,32 @@ const verificarAcceso = async () => {
   // ==========================================
 
   const cambiarEstadoPedido = async (id: number, nuevoEstado: string) => {
-    const { error } = await supabase
-      .from('pedidos_activos')
-      .update({ estado: nuevoEstado })
-      .eq('id', id);
-    if (!error) cargarPedidosTaller();
+    // 1. Obtenemos el nombre del usuario logueado actualmente
+    const nombreOperador = usuarioLogueado?.nombre || "Usuario";
+
+    // 2. Determinamos qué poner en la columna 'disenado_por'
+    // Si el estado es 'Diseñando', guardamos el nombre. 
+    // Si es 'Pendiente', lo ponemos en 'PENDIENTE' para liberar el trabajo.
+    const disenadorActualizado = nuevoEstado === 'Diseñando' ? nombreOperador : 'PENDIENTE';
+
+    try {
+      const { error } = await supabase
+        .from('pedidos_activos')
+        .update({ 
+          estado: nuevoEstado,
+          disenado_por: disenadorActualizado // <-- Cambio clave aquí
+        })
+        .eq('id', id);
+
+      if (!error) {
+        cargarPedidosTaller();
+      } else {
+        throw error;
+      }
+    } catch (err: any) {
+      console.error("Error al actualizar estado:", err.message);
+      alert("Error al actualizar taller");
+    }
   };
 
   const entregarPedidoFinalv2 = async (nombreCliente: string) => {
@@ -584,60 +632,81 @@ const verificarAcceso = async () => {
     const nombreLimpio = nombreCliente.trim();
     const fechaHoy = getBoliviaISO();
     
+    // Buscamos la venta pendiente del cliente
     const ventaActual = listaVentas.find(v => v.nombre_cliente?.trim() === nombreLimpio && v.estado === 'Pendiente');
-    if (!ventaActual) return alert("No hay pedidos pendientes.");
+    if (!ventaActual) return alert("No hay pedidos de venta pendientes para este cliente.");
 
     const saldoActual = Number(ventaActual.saldo) || 0;
     
     // PREGUNTA 1: ¿Cuánto paga hoy?
     const monto = window.prompt(`CLIENTE: ${nombreLimpio}\nSALDO PENDIENTE: ${saldoActual} Bs.\n\n¿Cuánto cancela hoy?`, saldoActual.toString());
-    if (monto === null) return;
+    if (monto === null) return; // Cancelar si el usuario cierra el prompt
     const pagoHoy = parseFloat(monto) || 0;
 
-    // PREGUNTA 2: ¿Hay rebaja o el resto se pierde? 
-    // Si lo que paga hoy es menos que el saldo, preguntamos si el resto sigue pendiente o se anula.
-    let nuevoEstado = 'Pendiente';
-    let nuevoTotal = Number(ventaActual.pedido_total);
+    // Lógica de estados y totales
+    let nuevoEstadoVenta = 'Pendiente';
+    let nuevoTotalPedido = Number(ventaActual.pedido_total);
 
     if (pagoHoy < saldoActual) {
-      const respuesta = confirm("El pago es menor al saldo. ¿Deseas PERDONAR el resto (Rebaja/Anulación) para cerrar la deuda?\n\nOK = Deuda saldada (Saldo 0).\nCancelar = El resto queda como deuda pendiente.");
+      const respuesta = confirm("El pago es menor al saldo. ¿Deseas PERDONAR el resto (Rebaja/Anulación) para cerrar la deuda?\n\nOK = Deuda saldada (Cerrar pedido).\nCancelar = El resto queda como deuda pendiente.");
       if (respuesta) {
-        // Ajustamos el total del pedido para que coincida con lo pagado hasta ahora
-        nuevoTotal = (Number(ventaActual.cuenta) || 0) + pagoHoy;
-        nuevoEstado = 'Entregado';
+        // Ajustamos el total para que coincida con lo pagado (Cuenta anterior + lo de hoy)
+        nuevoTotalPedido = (Number(ventaActual.cuenta) || 0) + pagoHoy;
+        nuevoEstadoVenta = 'Entregado';
       }
     } else {
-      nuevoEstado = 'Entregado';
+      // Si paga el total o más, se marca como entregado
+      nuevoEstadoVenta = 'Entregado';
     }
 
-    const nSaldo = Math.max(0, (nuevoTotal - ((Number(ventaActual.cuenta) || 0) + pagoHoy)));
+    const nuevoSaldo = Math.max(0, (nuevoTotalPedido - ((Number(ventaActual.cuenta) || 0) + pagoHoy)));
 
+    // 1. ACTUALIZAR TABLA REGISTRO_VENTAS
     const { error: errorVenta } = await supabase
       .from('registro_ventas')
       .update({ 
-        pedido_total: nuevoTotal, // Se ajusta si hubo rebaja
+        pedido_total: nuevoTotalPedido,
         cuenta: (Number(ventaActual.cuenta) || 0) + pagoHoy,
-        saldo: nSaldo,
-        estado: nuevoEstado,
+        saldo: nuevoSaldo,
+        estado: nuevoEstadoVenta,
         fecha: fechaHoy 
       })
       .eq('id_pedido', ventaActual.id_pedido);
 
     if (errorVenta) throw errorVenta;
 
-    // Archivar solo los trabajos seleccionados
-    if (pedidosSeleccionados.length > 0) {
-      await supabase
+    // 2. ACTUALIZAR Y ARCHIVAR TRABAJOS EN TALLER (pedidos_activos)
+    // Si no marcaste checkboxes, el sistema busca todos los que estén listos para entregar.
+    const idsAArchivar = pedidosSeleccionados.length > 0 
+      ? pedidosSeleccionados 
+      : listaPedidosTaller
+          .filter(p => p.nombre_cliente?.trim() === nombreLimpio && (p.estado === 'Para Imprimir' || p.estado === 'Finalizado'))
+          .map(p => p.id);
+
+    if (idsAArchivar.length > 0) {
+      const { error: errorTaller } = await supabase
         .from('pedidos_activos')
-        .update({ estado: 'Archivado', fecha_entrega: fechaHoy })
-        .in('id', pedidosSeleccionados);
+        .update({ 
+          estado: 'Archivado', 
+          fecha_entrega: fechaHoy 
+        })
+        .in('id', idsAArchivar);
+
+      if (errorTaller) throw errorTaller;
     }
 
-    alert("🚀 Proceso completado. Datos actualizados.");
+    alert("🚀 Proceso completado. Venta actualizada y trabajos archivados.");
+    
+    // Limpieza de estados locales y refresco de datos
     setPedidosSeleccionados([]);
-    await Promise.all([cargarDatosVentas(), cargarPedidosTaller(), refrescarTotalesHoy()]);
+    await Promise.all([
+      cargarDatosVentas(), 
+      cargarPedidosTaller(), 
+      refrescarTotalesHoy()
+    ]);
     
   } catch (err: any) {
+    console.error("Error en entrega:", err);
     alert("Error: " + err.message);
   }
 };
@@ -1609,14 +1678,12 @@ return (
           .filter((p: any) => p.estado !== 'Archivado')
           .reduce((acc: any, pedido: any) => {
             if (!acc[pedido.nombre_cliente]) {
-              // BUSCAMOS SOLO LAS PREFERENCIAS DEL CLIENTE
               const infoCliente = listaClientes.find(c => c.Nombre === pedido.nombre_cliente);
-              
               acc[pedido.nombre_cliente] = { 
                 nombre: pedido.nombre_cliente,
                 telefono: infoCliente?.Telefono || '',
                 tipo: infoCliente?.Tipo || 'Cliente',
-                preferencias: infoCliente?.preferencias || '', // Info clave aquí
+                preferencias: infoCliente?.preferencias || '',
                 trabajos: [],
                 total: 0, espera: 0, haciendo: 0, listos: 0
               };
@@ -1638,12 +1705,12 @@ return (
         return (
           <div key={idx} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden transition-all">
             
-            {/* HEADER CLIENTE (Elegante y Simple) */}
+            {/* HEADER CLIENTE */}
             <div 
               onClick={() => setClienteAbierto(abierto ? null : grupo.nombre)}
               className={`p-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition-colors ${abierto ? 'bg-slate-50/80 border-b border-slate-100' : ''}`}
             >
-              <div className="flex-1 pr-4"> {/* Añadido padding derecho para separar de los contadores */}
+              <div className="flex-1 pr-4">
                 <div className="flex items-center gap-2 mb-0.5">
                   <h3 className="font-bold text-slate-800 text-base">{grupo.nombre}</h3>
                   <span className={`text-[9px] px-2 py-0.5 rounded-md font-bold uppercase tracking-tighter ${
@@ -1653,21 +1720,12 @@ return (
                     {grupo.tipo}
                   </span>
                 </div>
-                
-                {/* --- SECCIÓN DE DETALLES DEL CLIENTE (TELF Y PREFERENCIAS MINI) --- */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:gap-3">
                   <p className="text-xs text-slate-400 font-medium">{grupo.telefono}</p>
-                  
-                  {/* --- NUEVO: PREFERENCIAS MINIMALISTAS EN LA ESQUINA DEL TEXTO --- */}
-                  {grupo.preferencias && (
-                    <span className="inline-block mt-1 sm:mt-0 text-[10px] font-medium text-blue-500 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 italic truncate max-w-xs" title={grupo.preferencias}>
-                      Pref: {grupo.preferencias}
-                    </span>
-                  )}
                 </div>
               </div>
 
-              {/* Contadores (Sin cambios) */}
+              {/* Contadores */}
               <div className="flex gap-3 items-center mr-4">
                 {grupo.espera > 0 && <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span><span className="text-[10px] font-bold text-slate-400">{grupo.espera}</span></div>}
                 {grupo.haciendo > 0 && <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span><span className="text-[10px] font-bold text-orange-500">{grupo.haciendo}</span></div>}
@@ -1677,25 +1735,49 @@ return (
               <span className={`text-slate-300 transition-transform ${abierto ? 'rotate-180' : ''}`}>▾</span>
             </div>
 
-            {/* CONTENIDO DESPLEGABLE (SOLO LISTA DE TRABAJOS, LIMPIO) */}
+            {/* CONTENIDO DESPLEGABLE */}
             {abierto && (
               <div className="p-3 space-y-2 bg-[#FCFDFF]">
-                {/* LISTA DE TRABAJOS (Tu diseño original sin el bloque de avisos azul) */}
                 {grupo.trabajos.map((trabajo: any) => {
                   const listo = trabajo.estado === 'Para Imprimir' || trabajo.estado === 'Finalizado';
                   const doing = trabajo.estado === 'Diseñando';
 
                   return (
-                    <div key={trabajo.id} className={`p-4 rounded-xl border transition-all ${listo ? 'bg-slate-50 border-slate-100' : 'bg-white border-slate-200 shadow-sm'}`}>
+                    <div 
+                      key={trabajo.id} 
+                      className={`p-4 rounded-xl border transition-all duration-300 ${
+                        listo ? 'bg-slate-50 border-slate-100' : 
+                        doing ? 'bg-blue-50 border-blue-200 shadow-md ring-1 ring-blue-100' : 
+                        'bg-white border-slate-200 shadow-sm'
+                      }`}
+                    >
+                      {/* --- AVISO DE DISEÑADOR (TU PEDIDO) --- */}
+                      <div className="flex justify-between items-center mb-3">
+                         <p className="text-[8px] font-black text-slate-400 uppercase tracking-tighter">
+                           Atendido por: {trabajo.registrado_por || '---'}
+                         </p>
+                         
+                         {doing && (
+                           <div className="flex items-center gap-1.5 bg-blue-100 px-2 py-0.5 rounded-md border border-blue-200">
+                             <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse"></span>
+                             <p className="text-[9px] font-black text-blue-700 uppercase italic">
+                               {trabajo.disenado_por || 'ALGUIEN'} ESTÁ DISEÑANDO
+                             </p>
+                           </div>
+                         )}
+                      </div>
+
                       <div className="flex justify-between items-start mb-4">
                         <div>
                           <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${listo ? 'text-slate-300' : 'text-blue-500'}`}>
                             {trabajo.servicio}
                           </p>
                           <h4 className={`text-sm font-semibold uppercase ${listo ? 'text-slate-300 line-through' : 'text-slate-700'}`}>
-                            {trabajo.detalle || 'Trabajo sin detalle'}
+                            {trabajo.detalle || 'Sin detalle'}
                           </h4>
-                          <p className="text-[10px] text-slate-400 font-medium mt-1">Dimensiones: {trabajo.ancho} x {trabajo.alto} m</p>
+                          <p className="text-[10px] text-slate-400 font-medium mt-1">
+                            {trabajo.ancho} x {trabajo.alto} m
+                          </p>
                         </div>
                         <div className="text-right">
                           <span className="text-xs font-bold text-slate-800 bg-slate-50 px-2 py-1 rounded border border-slate-100">
@@ -1705,30 +1787,47 @@ return (
                       </div>
 
                       {!listo && (
-                         <div className="mb-4">
+                        <>
+                          <div className="mb-4">
                             <button 
                               onClick={() => setModalSubida({ abierto: true, pedidoId: trabajo.id })}
                               className={`w-full h-10 rounded-lg border-2 border-dashed flex items-center justify-center gap-2 transition-all ${trabajo.url_foto ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`}
                             >
-                                <span className="text-lg">{trabajo.url_foto ? '✅' : '📸'}</span>
-                                <span className="text-[10px] font-black uppercase tracking-widest">{trabajo.url_foto ? 'Ver / Cambiar Captura' : 'Subir Captura (Ctrl+V)'}</span>
+                              <span className="text-lg">{trabajo.url_foto ? '✅' : '📸'}</span>
+                              <span className="text-[10px] font-black uppercase tracking-widest">{trabajo.url_foto ? 'Ver Captura' : 'Subir Captura'}</span>
                             </button>
-                         </div>
+                          </div>
+
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => cambiarEstadoPedido(trabajo.id, 'Pendiente')} 
+                              className={`flex-1 h-9 rounded-lg text-[10px] font-bold uppercase border transition-all ${doing ? 'bg-white text-red-400 border-red-100 hover:bg-red-50' : 'bg-slate-100 text-slate-600 border-slate-200'}`}
+                            >
+                              {doing ? '✖ Soltar' : 'Espera'}
+                            </button>
+
+                            <button 
+                              onClick={() => cambiarEstadoPedido(trabajo.id, 'Diseñando')} 
+                              className={`flex-[2] h-9 rounded-lg text-[10px] font-bold uppercase border transition-all ${doing ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:border-blue-300'}`}
+                            >
+                              {doing ? 'En Proceso' : '🎨 Empezar Diseño'}
+                            </button>
+
+                            <button 
+                              onClick={() => { if(confirm("¿Listo?")) cambiarEstadoPedido(trabajo.id, 'Para Imprimir') }} 
+                              className="px-4 h-9 rounded-lg bg-slate-900 text-white text-[10px] font-bold uppercase hover:bg-emerald-600 transition-colors"
+                            >
+                              Listo
+                            </button>
+                          </div>
+                        </>
                       )}
 
-                      <div className="flex gap-2">
-                        {!listo ? (
-                          <>
-                            <button onClick={() => cambiarEstadoPedido(trabajo.id, 'Pendiente')} className={`flex-1 h-9 rounded-lg text-[10px] font-bold uppercase border ${trabajo.estado === 'Pendiente' ? 'bg-slate-100 text-slate-600' : 'text-slate-300'}`}>Espera</button>
-                            <button onClick={() => cambiarEstadoPedido(trabajo.id, 'Diseñando')} className={`flex-1 h-9 rounded-lg text-[10px] font-bold uppercase border ${doing ? 'bg-orange-50 text-orange-600' : 'text-slate-300'}`}>Diseñar</button>
-                            <button onClick={() => { if(confirm("¿Finalizar diseño?")) cambiarEstadoPedido(trabajo.id, 'Para Imprimir') }} className="px-4 h-9 rounded-lg bg-slate-900 text-white text-[10px] font-bold uppercase">Listo</button>
-                          </>
-                        ) : (
-                          <div className="w-full text-center py-1">
-                            <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest">Enviado a Impresión</span>
-                          </div>
-                        )}
-                      </div>
+                      {listo && (
+                        <div className="w-full text-center py-2 bg-emerald-50 rounded-lg border border-emerald-100">
+                          <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">✨ Enviado a Impresión</span>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
