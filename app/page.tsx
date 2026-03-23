@@ -85,6 +85,11 @@ const [gastoDetalle, setGastoDetalle] = useState('');
 const [totalIngresosHoy, setTotalIngresosHoy] = useState<number>(0);
 const [totalGastosHoy, setTotalGastosHoy] = useState<number>(0);
 
+// --- ESTADOS PARA LOGIN Y SEGURIDAD ---
+const [usuarioLogueado, setUsuarioLogueado] = useState<any>(null);
+const [pinIngresado, setPinIngresado] = useState("");
+const [cargandoLogin, setCargandoLogin] = useState(false);
+
 // --- ESTADOS PARA DASHBOARD ---
 const [mostrarDashboard, setMostrarDashboard] = useState(false);
 const obtenerDatosVentasSemanales = () => {
@@ -242,7 +247,39 @@ const obtenerDatosVS = () => {
       console.error("Error refrescando totales:", error);
     }
   };
+const verificarAcceso = async () => {
+  if (!pinIngresado) return alert("Por favor, ingresa tu código de acceso");
+  
+  setCargandoLogin(true);
+  try {
+    const { data: usuario, error } = await supabase
+      .from('usuarios') 
+      .select('*')
+      .eq('pin', String(pinIngresado).trim()) 
+      .maybeSingle();
 
+    if (error) throw error;
+
+    if (usuario) {
+      setUsuarioLogueado(usuario); 
+      
+      // --- ESTA ES LA PARTE QUE DEBES CAMBIAR ---
+      // Forzamos a que TODOS (Admin y Giga) vayan a 'inicio' y 'menu'
+      setPestaña('inicio');
+      setAccionInicio('menu'); 
+      // ------------------------------------------
+
+    } else {
+      alert(`El código "${pinIngresado}" no existe en la base de datos.`);
+      setPinIngresado(""); 
+    }
+  } catch (err: any) {
+    console.error("Error:", err);
+    alert("Error de conexión: " + (err.message || "Desconocido"));
+  } finally {
+    setCargandoLogin(false);
+  }
+};
   const cargarDatosVentas = async () => {
     const anioActual = new Date().getFullYear();
     const { data, error } = await supabase
@@ -413,15 +450,17 @@ const obtenerDatosVS = () => {
       const fechaFijaBolivia = getBoliviaISO();
       const nombreLimpio = nombreClienteInput.toUpperCase().trim();
 
+      // --- [CAPTURAR OPERADOR] ---
+      // Usamos el nombre del usuario que inició sesión con su PIN
+      const nombreOperador = usuarioLogueado?.nombre || "SISTEMA";
+
       // --- [NUEVO: REGISTRO AUTOMÁTICO DE CLIENTE] ---
-      // 1. Verificamos si el cliente existe en la tabla 'Clientes'
       const { data: clienteExistente } = await supabase
         .from('Clientes')
         .select('*')
         .eq('Nombre', nombreLimpio)
         .maybeSingle();
 
-      // 2. Si NO existe, lo creamos como 'Regular' automáticamente
       if (!clienteExistente) {
         console.log("Cliente nuevo detectado, registrando como Regular...");
         const { error: errorAutoRegistro } = await supabase
@@ -429,20 +468,15 @@ const obtenerDatosVS = () => {
           .insert([{ 
             Nombre: nombreLimpio, 
             Telefono: telClienteInput, 
-            Tipo: 'Regular' // <--- Esto asegura que aparezca en tus gráficos
+            Tipo: 'Regular'
           }]);
         
-        if (errorAutoRegistro) {
-          console.error("Error en auto-registro:", errorAutoRegistro);
-        } else {
-          // Actualizamos la lista local de clientes para que el Dashboard lo vea
+        if (!errorAutoRegistro) {
           const { data: dataClie } = await supabase.from('Clientes').select('*').order('Nombre', { ascending: true });
           if (dataClie) setListaClientes(dataClie);
         }
       }
-      // --- [FIN DEL NUEVO BLOQUE] ---
 
-      // Calculamos el total de este nuevo pedido
       const totalNuevoTrabajo = trabajos.reduce((acc, t) => acc + (Number(t.precio) || 0), 0);
       
       const desglosePreciosNuevos = trabajos.map(t => ({
@@ -456,6 +490,7 @@ const obtenerDatosVS = () => {
       ).join(" // ");
 
       // 1. INSERTAR EN TALLER (pedidos_activos)
+      // Agregamos registrado_por y dejamos disenado_por como NULO o PENDIENTE
       const { error: errorTaller } = await supabase.from('pedidos_activos').insert(
         trabajos.map(t => ({
           id_pedido: idPedidoActual,
@@ -467,7 +502,10 @@ const obtenerDatosVS = () => {
           detalle: t.detalle || '',
           precio_unitario: Number(t.precio), 
           estado: 'Pendiente',
-          fecha: fechaFijaBolivia
+          fecha: fechaFijaBolivia,
+          // --- AQUÍ LAS NUEVAS COLUMNAS ---
+          registrado_por: nombreOperador,
+          disenado_por: 'PENDIENTE'
         }))
       );
       if (errorTaller) throw errorTaller;
@@ -517,7 +555,7 @@ const obtenerDatosVS = () => {
       }
 
       await Promise.all([refrescarTotalesHoy(), cargarDatosVentas()]);
-      alert("¡Pedido guardado y enviado a taller!");
+      alert(`¡Pedido guardado por ${nombreOperador} y enviado a taller!`);
       
       setTrabajos([]);
       setNombreClienteInput('');
@@ -731,84 +769,223 @@ const obtenerDatosVS = () => {
       alert("❌ Hubo un error al procesar la entrega.");
     }
   };
- return (
-    <main className="min-h-screen bg-gray-100 font-sans pb-24 text-slate-900">
+const manejarAccionInicio = (accion: string) => {
+  const esGiga = usuarioLogueado?.rol?.toUpperCase() === 'GIGA';
 
-      <header className="bg-white p-4 shadow-sm sticky top-0 z-10 flex justify-between items-center border-b border-gray-100">
-        <div>
-          <h1 className="text-xl font-bold text-blue-600 tracking-tight">Control Click</h1>
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Taller de Impresión</p>
+  // Permitimos 'menu' (para que vea el inicio) y 'nuevo-pedido'
+  const accionesPermitidas = ['menu', 'nuevo-pedido'];
+
+  if (esGiga && !accionesPermitidas.includes(accion)) {
+    // Si quieres que no salga el alert molesto, puedes quitar esta línea
+    alert("Acceso restringido: Solo el Administrador puede realizar esta acción.");
+    return;
+  }
+
+  setAccionInicio(accion);
+};
+return (
+  <>
+    {!usuarioLogueado ? (
+      /* --- LOGIN CLÁSICO PROFESIONAL CON LOGO MÁS GRANDE --- */
+      <div className="min-h-screen flex items-center justify-center bg-white p-6">
+        {/* Recuadro central sólido y elegante con sombra suave */}
+        <div className="bg-white w-full max-w-sm p-10 pt-12 rounded-[40px] border-2 border-slate-50 shadow-[0_15px_40px_rgba(0,0,0,0.03)] animate-in fade-in zoom-in duration-500">
+          
+          <div className="text-center mb-10">
+            {/* LOGO DE TU EMPRESA - TAMAÑO AGRANDADO */}
+            <div className="mb-8 flex justify-center mt-2">
+              <div className="relative">
+                {/* 1. Imagen del Logo Principal */}
+                <img 
+                  src="/logo.png" // Asegúrate de que tu logo esté en /public/logo.png
+                  alt="Logo Arte Click y Diseño" 
+                  // Cambiado de w-32 a w-48 para que sea más grande y object-contain para no deformar
+                  className="w-48 h-auto object-contain mx-auto"
+                  onError={(e) => {
+                    // Si falla la imagen, muestra el respaldo elegante
+                    e.currentTarget.style.display = 'none';
+                    e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                  }}
+                />
+                
+                {/* 2. Respaldo elegante (se muestra si la imagen falla) */}
+                <div className="hidden bg-blue-600 w-24 h-24 rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-blue-100">
+                  <span className="text-3xl text-white font-black">C</span>
+                </div>
+              </div>
+            </div>
+
+            <h1 className="text-2xl font-black text-slate-950 uppercase tracking-tighter leading-none">
+              Click<span className="text-blue-600"> </span>Gestión
+            </h1>
+            <p className="text-[10px] text-slate-400 mt-2 uppercase tracking-[0.3em] font-bold">Taller de Trabajo</p>
+          </div>
+
+          <div className="space-y-6">
+            <div className="space-y-2">
+              <label className="text-[11px] font-black text-slate-500 uppercase tracking-widest ml-1">Código de Acceso</label>
+              <input 
+                type="password" 
+                value={pinIngresado}
+                onChange={(e) => setPinIngresado(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && verificarAcceso()}
+                placeholder="••••"
+                className="w-full h-16 text-center text-3xl font-bold bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-blue-500 focus:bg-white outline-none transition-all text-slate-950 placeholder:text-slate-200"
+              />
+            </div>
+
+            <button 
+              onClick={verificarAcceso}
+              disabled={cargandoLogin}
+              className="w-full h-16 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-sm uppercase tracking-widest active:scale-[0.97] transition-all disabled:opacity-60 flex items-center justify-center gap-3 shadow-lg shadow-blue-50"
+            >
+              {cargandoLogin ? (
+                <>
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  Verificando...
+                </>
+              ) : (
+                "Ingresar"
+              )}
+            </button>
+          </div>
         </div>
-        <div className="bg-blue-600 h-10 w-10 rounded-full flex items-center justify-center text-white font-bold shadow-md">M</div>
-      </header>
+      </div>
+    ) : (
+      /* --- APP PRINCIPAL LIMPIA --- */
+      <main className="min-h-screen bg-[#FDFDFD] font-sans pb-24 text-slate-900">
+        <header className="bg-white p-5 flex justify-between items-center border-b border-slate-100 sticky top-0 z-50">
+          <div className="flex items-center gap-3">
+             {/* LOGO EN EL HEADER (QUITADO EL CUADRO AZUL) */}
+             <img 
+                src="/logo.png" 
+                alt="Logo" 
+                className="h-8 w-auto object-contain" 
+              />
+             <div>
+              <h1 className="text-lg font-bold text-slate-900 tracking-tight leading-none">Click Gestión</h1>
+              <p className="text-[10px] text-blue-600 font-bold uppercase tracking-widest mt-0.5">Control de Taller</p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-3 pr-2">
+            <div className="text-right">
+              <p className="text-xs font-bold text-slate-900 uppercase tracking-tighter leading-none">
+                {usuarioLogueado?.nombre}
+              </p>
+              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md ${
+                usuarioLogueado?.rol?.toUpperCase() === 'ADMIN' ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-500'
+              } uppercase mt-1 inline-block`}>
+                {usuarioLogueado?.rol}
+              </span>
+            </div>
+            <div className="h-10 w-10 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-600 text-sm font-black shadow-sm">
+              {usuarioLogueado?.nombre?.charAt(0).toUpperCase()}
+            </div>
+          </div>
+        </header>
 
       <div className="p-4">
-        {pestaña === 'inicio' && (
-          <section className="animate-in fade-in duration-500">
+  {pestaña === 'inicio' && (
+    <section className="animate-in fade-in duration-500">
+      {accionInicio === 'menu' && (
+        <>
+          {/* --- SECCIÓN DE RESUMEN DE CAJA --- */}
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div className="bg-white p-4 rounded-2xl border-b-4 border-green-500 shadow-sm transition-all">
+              <p className="text-[10px] uppercase font-bold text-gray-400">Hoy Ingresó</p>
+              <p className="text-xl font-bold text-green-600 font-mono">
+                {totalIngresosHoy.toFixed(2)} Bs.
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-2xl border-b-4 border-red-500 shadow-sm transition-all">
+              <p className="text-[10px] uppercase font-bold text-gray-400">Hoy Gastó</p>
+              <p className="text-xl font-bold text-red-600 font-mono">
+                {totalGastosHoy.toFixed(2)} Bs.
+              </p>
+            </div>
+          </div>
 
-            {accionInicio === 'menu' && (
-              <>
-                {/* --- SECCIÓN DE RESUMEN DE CAJA ACTUALIZADA --- */}
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div className="bg-white p-4 rounded-2xl border-b-4 border-green-500 shadow-sm transition-all">
-                    <p className="text-[10px] uppercase font-bold text-gray-400">Hoy Ingresó</p>
-                    <p className="text-xl font-bold text-green-600 font-mono">
-                      {totalIngresosHoy.toFixed(2)} Bs.
-                    </p>
-                  </div>
-                  <div className="bg-white p-4 rounded-2xl border-b-4 border-red-500 shadow-sm transition-all">
-                    <p className="text-[10px] uppercase font-bold text-gray-400">Hoy Gastó</p>
-                    <p className="text-xl font-bold text-red-600 font-mono">
-                      {totalGastosHoy.toFixed(2)} Bs.
-                    </p>
-                  </div>
-                </div>
+          {/* BARRA DE BALANCE NETO */}
+          <div className="bg-blue-600 p-3 rounded-2xl mb-8 shadow-md flex justify-between items-center px-6">
+            <span className="text-white text-[10px] font-black uppercase tracking-widest">Balance Neto</span>
+            <span className="text-white text-lg font-bold font-mono">
+              {(totalIngresosHoy - totalGastosHoy).toFixed(2)} Bs.
+            </span>
+          </div>
 
-                {/* BARRA DE BALANCE NETO */}
-                <div className="bg-blue-600 p-3 rounded-2xl mb-8 shadow-md flex justify-between items-center px-6">
-                  <span className="text-white text-[10px] font-black uppercase tracking-widest">Balance Neto</span>
-                  <span className="text-white text-lg font-bold font-mono">
-                    {(totalIngresosHoy - totalGastosHoy).toFixed(2)} Bs.
-                  </span>
-                </div>
+          <div className="grid grid-cols-2 gap-4">
+            {/* BOTÓN ANÁLISIS - Bloqueado */}
+            <button 
+              onClick={() => {
+                if (usuarioLogueado?.rol?.toUpperCase() === 'GIGA') return;
+                cargarDatosVentas();
+                setMostrarDashboard(true);
+              }} 
+              className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all group"
+            >
+              <span className="text-4xl group-hover:scale-110 transition-transform">📊</span>
+              <span className="font-bold text-sm text-slate-700">Análisis</span>
+            </button>   
 
-                <div className="grid grid-cols-2 gap-4">
-                        {/* BOTÓN TRANSFORMADO: De Cobrar Venta a Análisis */}
-                        <button 
-                          onClick={() => {
-                            cargarDatosVentas(); // Carga los datos de Supabase antes de abrir
-                            setMostrarDashboard(true); // Activa el modal del Dashboard
-                          }} 
-                          className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all group"
-                        >
-                          <span className="text-4xl group-hover:scale-110 transition-transform">📊</span>
-                          <span className="font-bold text-sm text-slate-700">Análisis</span>
-                        </button>   
-                  
-                  <button onClick={() => setAccionInicio('nuevo-gasto')} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
-                    <span className="text-4xl">💸</span>
-                    <span className="font-bold text-sm">Gasto</span>
-                  </button>
+            {/* BOTÓN GASTO - Bloqueado */}
+            <button 
+              onClick={() => {
+                if (usuarioLogueado?.rol?.toUpperCase() === 'GIGA') return;
+                setAccionInicio('nuevo-gasto');
+              }} 
+              className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all"
+            >
+              <span className="text-4xl">💸</span>
+              <span className="font-bold text-sm">Gasto</span>
+            </button>
 
-                  <button onClick={() => setAccionInicio('nuevo-cliente')} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
-                    <span className="text-4xl">👤</span>
-                    <span className="font-bold text-sm">Cliente</span>
-                  </button>
-                  <button onClick={() => setAccionInicio('nuevo-pedido')} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
-                    <span className="text-4xl">📋</span>
-                    <span className="font-bold text-sm">Pedido</span>
-                  </button>
-                  <button onClick={() => setAccionInicio('config-servicios')} className="bg-slate-800 text-white p-6 rounded-3xl flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
-                    <span className="text-3xl">⚙️</span>
-                    <span className="font-bold text-[10px] uppercase text-center leading-tight">Lista de<br />Servicios</span>
-                  </button>
+            {/* BOTÓN CLIENTE - Bloqueado */}
+            <button 
+              onClick={() => {
+                if (usuarioLogueado?.rol?.toUpperCase() === 'GIGA') return;
+                setAccionInicio('nuevo-cliente');
+              }} 
+              className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all"
+            >
+              <span className="text-4xl">👤</span>
+              <span className="font-bold text-sm">Cliente</span>
+            </button>
 
-                  <button onClick={() => setAccionInicio('config-categorias-gastos')} className="bg-slate-800 text-white p-6 rounded-3xl flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all">
-                    <span className="text-3xl">🛠️</span>
-                    <span className="font-bold text-[10px] uppercase text-center leading-tight">Categorías<br />de Gastos</span>
-                  </button>
-                </div>
-              </>
+            {/* BOTÓN PEDIDO - Disponible para todos */}
+            <button 
+              onClick={() => setAccionInicio('nuevo-pedido')} 
+              className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all"
+            >
+              <span className="text-4xl">📋</span>
+              <span className="font-bold text-sm">Pedido</span>
+            </button>
+
+            {/* LISTA SERVICIOS - Bloqueado */}
+            <button 
+              onClick={() => {
+                if (usuarioLogueado?.rol?.toUpperCase() === 'GIGA') return;
+                setAccionInicio('config-servicios');
+              }} 
+              className="bg-slate-800 text-white p-6 rounded-3xl flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all"
+            >
+              <span className="text-3xl">⚙️</span>
+              <span className="font-bold text-[10px] uppercase text-center leading-tight">Lista de<br />Servicios</span>
+            </button>
+
+            {/* CATEGORÍAS GASTOS - Bloqueado */}
+            <button 
+              onClick={() => {
+                if (usuarioLogueado?.rol?.toUpperCase() === 'GIGA') return;
+                setAccionInicio('config-categorias-gastos');
+              }} 
+              className="bg-slate-800 text-white p-6 rounded-3xl flex flex-col items-center justify-center gap-2 h-36 active:scale-95 transition-all"
+            >
+              <span className="text-3xl">🛠️</span>
+              <span className="font-bold text-[10px] uppercase text-center leading-tight">Categorías<br />de Gastos</span>
+            </button>
+          </div>
+        </>                      
             )}
 
             {/* VISTA NUEVA: CONFIGURAR CATEGORÍAS DE GASTOS */}
@@ -1167,16 +1344,25 @@ const obtenerDatosVS = () => {
     {/* Encabezado del Recibo */}
     <div className="bg-slate-800 p-4 text-center relative">
       <h2 className="text-white font-black italic tracking-widest uppercase text-sm">Nota de Venta / Recibo</h2>
-      <div className="flex justify-center gap-2 items-center">
-        <p className="text-slate-400 text-[9px] font-bold tracking-tighter uppercase">Click Gestión de Inventario</p>
-        {/* Etiqueta visual de categoría asignada */}
-        <span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase ${
-          tipoClienteInput === 'DECORADORA' ? 'bg-blue-500 text-white' : 
-          tipoClienteInput === 'EMPRESA' ? 'bg-green-500 text-white' : 'bg-orange-500 text-white'
-        }`}>
-          {tipoClienteInput || 'REGULAR'}
-        </span>
+      
+      <div className="flex flex-col items-center gap-1">
+        <div className="flex justify-center gap-2 items-center">
+          <p className="text-slate-400 text-[9px] font-bold tracking-tighter uppercase">Click Gestión de Inventario</p>
+          <span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase ${
+            tipoClienteInput === 'DECORADORA' ? 'bg-blue-500 text-white' : 
+            tipoClienteInput === 'EMPRESA' ? 'bg-green-500 text-white' : 'bg-orange-500 text-white'
+          }`}>
+            {tipoClienteInput || 'REGULAR'}
+          </span>
+        </div>
+        
+        {/* Indicador visual de quién está operando la app */}
+        <p className="text-[10px] text-emerald-400 font-black uppercase tracking-widest flex items-center gap-1">
+          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+          Atendido por: {usuarioLogueado?.nombre || 'SISTEMA'}
+        </p>
       </div>
+
       <button 
         onClick={() => { setAccionInicio('menu'); setTrabajos([]); setNombreClienteInput(''); setTelClienteInput(''); setTipoClienteInput('REGULAR'); }} 
         className="absolute right-4 top-4 text-slate-400 hover:text-white font-bold"
@@ -1201,7 +1387,6 @@ const obtenerDatosVS = () => {
                   setNombreClienteInput(encontrado.Nombre); 
                   setTipoClienteInput(encontrado.Tipo); 
                 } else {
-                  // Si el teléfono no existe, asumimos que es REGULAR
                   setTipoClienteInput('REGULAR');
                 }
               }}
@@ -1218,7 +1403,6 @@ const obtenerDatosVS = () => {
                 setNombreClienteInput(nom);
                 setMostrarSugerencias(true);
                 
-                // Si escribes un nombre que no está en la lista, es REGULAR
                 const existe = listaClientes.find(c => c.Nombre.toLowerCase() === nom.toLowerCase());
                 if (!existe) {
                   setTipoClienteInput('REGULAR');
@@ -1271,134 +1455,131 @@ const obtenerDatosVS = () => {
           {listaServicios.map((s, i) => <option key={i} value={s}>{s}</option>)}
         </select>
 
-  {/* Inputs con etiquetas de Metros (m) */}
-  <div className="grid grid-cols-3 gap-2">
-    <div className="relative">
-      <label className="text-[8px] font-black text-blue-500 absolute -top-2 left-2 bg-white px-1">ANCHO (m)</label>
-      <input id="ancho" type="number" step="0.01" placeholder="0.00" className="p-3 w-full rounded-xl text-xs font-bold border border-blue-200 text-center shadow-sm outline-none focus:border-blue-500" />
-    </div>
-    <div className="relative">
-      <label className="text-[8px] font-black text-blue-500 absolute -top-2 left-2 bg-white px-1">ALTO (m)</label>
-      <input id="alto" type="number" step="0.01" placeholder="0.00" className="p-3 w-full rounded-xl text-xs font-bold border border-blue-200 text-center shadow-sm outline-none focus:border-blue-500" />
-    </div>
-    <div className="relative">
-      <label className="text-[8px] font-black text-gray-400 absolute -top-2 left-2 bg-white px-1">CANT.</label>
-      <input id="cant" type="number" defaultValue="1" className="p-3 w-full rounded-xl text-xs font-bold border border-blue-200 text-center shadow-sm outline-none" />
-    </div>
-  </div>
+        <div className="grid grid-cols-3 gap-2">
+          <div className="relative">
+            <label className="text-[8px] font-black text-blue-500 absolute -top-2 left-2 bg-white px-1">ANCHO (m)</label>
+            <input id="ancho" type="number" step="0.01" placeholder="0.00" className="p-3 w-full rounded-xl text-xs font-bold border border-blue-200 text-center shadow-sm outline-none focus:border-blue-500" />
+          </div>
+          <div className="relative">
+            <label className="text-[8px] font-black text-blue-500 absolute -top-2 left-2 bg-white px-1">ALTO (m)</label>
+            <input id="alto" type="number" step="0.01" placeholder="0.00" className="p-3 w-full rounded-xl text-xs font-bold border border-blue-200 text-center shadow-sm outline-none focus:border-blue-500" />
+          </div>
+          <div className="relative">
+            <label className="text-[8px] font-black text-gray-400 absolute -top-2 left-2 bg-white px-1">CANT.</label>
+            <input id="cant" type="number" defaultValue="1" className="p-3 w-full rounded-xl text-xs font-bold border border-blue-200 text-center shadow-sm outline-none" />
+          </div>
+        </div>
 
-  <p className="text-[9px] text-blue-600 font-bold italic px-1">💡 Ejemplo: 60cm poner 0.60 | 1.2 metros poner 1.20</p>
+        <p className="text-[9px] text-blue-600 font-bold italic px-1">💡 Ejemplo: 60cm poner 0.60 | 1.2 metros poner 1.20</p>
 
-  <input 
-    id="detalle_trabajo" 
-    type="text" 
-    placeholder="DETALLES (Ej: Ojalillos, Lona Mate, Corte recto)" 
-    className="w-full p-3 rounded-xl border border-blue-200 text-[10px] font-bold uppercase outline-none shadow-sm" 
-  />
+        <input 
+          id="detalle_trabajo" 
+          type="text" 
+          placeholder="DETALLES (Ej: Ojalillos, Lona Mate, Corte recto)" 
+          className="w-full p-3 rounded-xl border border-blue-200 text-[10px] font-bold uppercase outline-none shadow-sm" 
+        />
 
-  <div className="flex gap-2 items-center">
-    <div className="flex-1 bg-white border-2 border-emerald-400 rounded-xl flex items-center px-3 shadow-sm">
-      <span className="text-[10px] font-black text-emerald-600 mr-2">Bs.</span>
-      <input id="precio_final" type="number" placeholder="PRECIO TOTAL" className="w-full py-3 font-black text-sm outline-none bg-transparent" />
-    </div>
-    <button 
-      onClick={() => {
-        const s = material;
-        const an = (document.getElementById('ancho') as HTMLInputElement).value;
-        const al = (document.getElementById('alto') as HTMLInputElement).value;
-        const ct = (document.getElementById('cant') as HTMLInputElement).value;
-        const pr = (document.getElementById('precio_final') as HTMLInputElement).value;
-        const dt = (document.getElementById('detalle_trabajo') as HTMLInputElement).value;
-        
-        if(!s || !pr || !an || !al) return alert("Falta llenar datos (Servicio, Medidas o Precio)");
+        <div className="flex gap-2 items-center">
+          <div className="flex-1 bg-white border-2 border-emerald-400 rounded-xl flex items-center px-3 shadow-sm">
+            <span className="text-[10px] font-black text-emerald-600 mr-2">Bs.</span>
+            <input id="precio_final" type="number" placeholder="PRECIO TOTAL" className="w-full py-3 font-black text-sm outline-none bg-transparent" />
+          </div>
+          <button 
+            onClick={() => {
+              const s = material;
+              const an = (document.getElementById('ancho') as HTMLInputElement).value;
+              const al = (document.getElementById('alto') as HTMLInputElement).value;
+              const ct = (document.getElementById('cant') as HTMLInputElement).value;
+              const pr = (document.getElementById('precio_final') as HTMLInputElement).value;
+              const dt = (document.getElementById('detalle_trabajo') as HTMLInputElement).value;
+              
+              if(!s || !pr || !an || !al) return alert("Falta llenar datos (Servicio, Medidas o Precio)");
 
-        // --- VALIDACIÓN DE SEGURIDAD PARA METROS ---
-        if (parseFloat(an) >= 10 || parseFloat(al) >= 10) {
-          const confirmar = confirm(`Has puesto ${an}x${al} metros. ¿Estás seguro que no son centímetros?\n\nSi son centímetros, usa 0.60 en lugar de 60.`);
-          if (!confirmar) return;
-        }
-        
-        setTrabajos([...trabajos, { 
-          servicio: s, ancho: an, alto: al, cant: ct, precio: Number(pr), detalle: dt 
-        }]);
+              if (parseFloat(an) >= 10 || parseFloat(al) >= 10) {
+                const confirmar = confirm(`Has puesto ${an}x${al} metros. ¿Estás seguro que no son centímetros?\n\nSi son centímetros, usa 0.60 en lugar de 60.`);
+                if (!confirmar) return;
+              }
+              
+              setTrabajos([...trabajos, { 
+                servicio: s, ancho: an, alto: al, cant: ct, precio: Number(pr), detalle: dt 
+              }]);
 
-        // Limpiar campos de trabajo
-        setMaterial('');
-        (document.getElementById('ancho') as HTMLInputElement).value = '';
-        (document.getElementById('alto') as HTMLInputElement).value = '';
-        (document.getElementById('cant') as HTMLInputElement).value = '1';
-        (document.getElementById('precio_final') as HTMLInputElement).value = '';
-        (document.getElementById('detalle_trabajo') as HTMLInputElement).value = '';
-      }}
-      className="bg-emerald-500 text-white h-12 px-4 rounded-xl font-black text-xs shadow-lg active:scale-95"
-    >
-      + AÑADIR
-    </button>
-  </div>
-</div>
+              setMaterial('');
+              (document.getElementById('ancho') as HTMLInputElement).value = '';
+              (document.getElementById('alto') as HTMLInputElement).value = '';
+              (document.getElementById('cant') as HTMLInputElement).value = '1';
+              (document.getElementById('precio_final') as HTMLInputElement).value = '';
+              (document.getElementById('detalle_trabajo') as HTMLInputElement).value = '';
+            }}
+            className="bg-emerald-500 text-white h-12 px-4 rounded-xl font-black text-xs shadow-lg active:scale-95"
+          >
+            + AÑADIR
+          </button>
+        </div>
+      </div>
 
-                {/* 3. LISTA DE ITEMS AGREGADOS */}
-                {trabajos.length > 0 && (
-                  <div className="border border-dashed border-slate-300 rounded-2xl overflow-hidden shadow-inner">
-                    <table className="w-full text-[10px]">
-                      <thead className="bg-slate-50 border-b">
-                        <tr className="text-slate-400 font-black">
-                          <th className="p-2 text-left">DESCRIPCIÓN</th>
-                          <th className="p-2 text-right">TOTAL</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {trabajos.map((t, idx) => (
-                          <tr key={idx} className="bg-white">
-                            <td className="p-2">
-                              <p className="font-black uppercase text-blue-700">{t.servicio}</p>
-                              <p className="text-gray-400 font-bold">{t.ancho}x{t.alto} | {t.cant} pz</p>
-                              {t.detalle && <p className="text-[8px] italic text-gray-500 leading-tight">{t.detalle}</p>}
-                            </td>
-                            <td className="p-2 text-right font-black text-slate-700">{t.precio.toFixed(2)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+      {/* 3. LISTA DE ITEMS AGREGADOS */}
+      {trabajos.length > 0 && (
+        <div className="border border-dashed border-slate-300 rounded-2xl overflow-hidden shadow-inner">
+          <table className="w-full text-[10px]">
+            <thead className="bg-slate-50 border-b">
+              <tr className="text-slate-400 font-black">
+                <th className="p-2 text-left">DESCRIPCIÓN</th>
+                <th className="p-2 text-right">TOTAL</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {trabajos.map((t, idx) => (
+                <tr key={idx} className="bg-white">
+                  <td className="p-2">
+                    <p className="font-black uppercase text-blue-700">{t.servicio}</p>
+                    <p className="text-gray-400 font-bold">{t.ancho}x{t.alto} | {t.cant} pz</p>
+                    {t.detalle && <p className="text-[8px] italic text-gray-500 leading-tight">{t.detalle}</p>}
+                  </td>
+                  <td className="p-2 text-right font-black text-slate-700">{t.precio.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-                {/* 4. TOTALES, A CUENTA Y SALDO */}
-                <div className="bg-slate-50 border-2 border-slate-200 rounded-3xl p-5 space-y-3 shadow-md">
-                  <div className="flex justify-between items-center border-b border-slate-200 pb-2">
-                    <span className="text-[10px] font-black text-slate-500 uppercase">Total Pedido:</span>
-                    <span className="text-xl font-black text-slate-800 font-mono">
-                      {trabajos.reduce((acc, t) => acc + (t.precio || 0), 0).toFixed(2)} Bs.
-                    </span>
-                  </div>
+      {/* 4. TOTALES, A CUENTA Y SALDO */}
+      <div className="bg-slate-50 border-2 border-slate-200 rounded-3xl p-5 space-y-3 shadow-md">
+        <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+          <span className="text-[10px] font-black text-slate-500 uppercase">Total Pedido:</span>
+          <span className="text-xl font-black text-slate-800 font-mono">
+            {trabajos.reduce((acc, t) => acc + (t.precio || 0), 0).toFixed(2)} Bs.
+          </span>
+        </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-black text-emerald-600 uppercase ml-1 italic">A Cuenta:</label>
-                      <input 
-                        type="number" 
-                        placeholder="0.00" 
-                        className="w-full p-3 bg-white border-2 border-emerald-200 rounded-2xl font-black text-emerald-700 outline-none text-center shadow-sm"
-                        onChange={(e) => setMontoAcuenta(Number(e.target.value) || 0)}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-black text-red-500 uppercase ml-1 italic">Saldo Pendiente:</label>
-                      <div className="w-full p-3 bg-red-50 border-2 border-red-100 rounded-2xl font-black text-red-600 text-center text-sm font-mono shadow-sm">
-                        {(trabajos.reduce((acc, t) => acc + (t.precio || 0), 0) - Number(montoAcuenta)).toFixed(2)}
-                      </div>
-                    </div>
-                  </div>
-
-                  <button 
-                    onClick={finalizarPedido}
-                    className="w-full py-5 bg-blue-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl active:scale-95 transition-all mt-2 italic"
-                  >
-                    💾 Guardar y Finalizar Recibo
-                  </button>
-                </div>
-              </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-emerald-600 uppercase ml-1 italic">A Cuenta:</label>
+            <input 
+              type="number" 
+              placeholder="0.00" 
+              className="w-full p-3 bg-white border-2 border-emerald-200 rounded-2xl font-black text-emerald-700 outline-none text-center shadow-sm"
+              onChange={(e) => setMontoAcuenta(Number(e.target.value) || 0)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[9px] font-black text-red-500 uppercase ml-1 italic">Saldo Pendiente:</label>
+            <div className="w-full p-3 bg-red-50 border-2 border-red-100 rounded-2xl font-black text-red-600 text-center text-sm font-mono shadow-sm">
+              {(trabajos.reduce((acc, t) => acc + (t.precio || 0), 0) - Number(montoAcuenta)).toFixed(2)}
             </div>
+          </div>
+        </div>
+
+        <button 
+          onClick={finalizarPedido}
+          className="w-full py-5 bg-blue-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl active:scale-95 transition-all mt-2 italic"
+        >
+          💾 Guardar y Finalizar Recibo
+        </button>
+      </div>
+    </div>
+  </div>
           )}
         </section>
       )}
@@ -2315,6 +2496,8 @@ const obtenerDatosVS = () => {
     </div>
   </div>
 )}
-      </main>
-    );
-    }
+     </main>
+      )} {/* <-- Esta llave cierra el condicional del Login */}
+    </>
+  ); // <-- Cierra el Return
+} // <-- Cierra la función Home
